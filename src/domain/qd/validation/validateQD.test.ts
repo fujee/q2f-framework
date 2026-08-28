@@ -26,10 +26,7 @@ function useRegionAnchorForCompleting(qd: QuestionDefinition): void {
   completing.completingGaps[0].workspaceStimulusRef = 'stimulus-image'
   completing.completingGaps[0].sourceAnchor = {
     kind: 'RegionAnchor',
-    x: 10,
-    y: 20,
-    width: 300,
-    height: 150,
+    payload: { implementationRegionId: 'answer-area' },
   }
   const textAssociation = qd.associations.find(
     ({ interactionRef, stimulusRef }) =>
@@ -133,6 +130,19 @@ describe('stabilized QD validation', () => {
     expect(validateQD(qd).aggregate).toBe('PASS')
   })
 
+  it('treats SourceAnchor locator payloads as scientifically opaque', () => {
+    const qd = cloneQuestionDefinition()
+    const completing = qd.responseInteractions[3]
+    if (completing.type !== 'Completing') throw new Error('fixture drift')
+    completing.completingGaps[0].sourceAnchor = {
+      kind: 'TextAnchor',
+      payload: {
+        rendererSpecificLocator: ['opaque', { anyShape: true }],
+      },
+    }
+    expect(validateQD(qd).aggregate).toBe('PASS')
+  })
+
   it('rejects a TextAnchor on a source without textual structure support', () => {
     const qd = cloneQuestionDefinition()
     const stimulus = qd.stimuli.find(({ id }) => id === 'stimulus-text')!
@@ -175,7 +185,10 @@ describe('stabilized QD validation', () => {
       id: 'gap-city-2',
       type: 'ItemGap',
       workspaceStimulusRef: 'stimulus-text',
-      sourceAnchor: { kind: 'TextAnchor', marker: '[city-2]' },
+      sourceAnchor: {
+        kind: 'TextAnchor',
+        payload: { implementationLocator: '[city-2]' },
+      },
       correctItemRefs: ['item-paris'],
     })
     expectFailure(qd, 'CMP-007')

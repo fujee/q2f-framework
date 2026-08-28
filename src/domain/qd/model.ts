@@ -36,15 +36,13 @@ export type ItemOrderPolicy = 'Fixed' | 'Permutable'
 
 export interface TextAnchor {
   kind: 'TextAnchor'
-  marker: string
+  /** Optional reference-implementation locator payload; scientifically opaque. */
+  payload?: unknown
 }
 export interface RegionAnchor {
   kind: 'RegionAnchor'
-  /** Renderer-specific normalized geometry retained as a technical payload. */
-  x: number
-  y: number
-  width: number
-  height: number
+  /** Optional reference-implementation locator payload; scientifically opaque. */
+  payload?: unknown
 }
 export type SourceAnchor = TextAnchor | RegionAnchor
 

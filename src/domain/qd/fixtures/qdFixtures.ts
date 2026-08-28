@@ -55,7 +55,10 @@ export const validAllInteractions: QuestionDefinition = {
           id: 'gap-city',
           type: 'ItemGap',
           workspaceStimulusRef: 'stimulus-text',
-          sourceAnchor: { kind: 'TextAnchor', marker: '[city]' },
+          sourceAnchor: {
+            kind: 'TextAnchor',
+            payload: { implementationLocator: '[city]' },
+          },
           correctItemRefs: ['item-paris'],
         },
       ],
