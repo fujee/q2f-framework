@@ -1,464 +1,202 @@
 import type { Ordering, Relating, Selecting } from '../../model'
 import { type Finding, fail, pass } from '../types'
 
-// ---------------------------------------------------------------------------
-// SEL — Selecting
-// ---------------------------------------------------------------------------
-
 export function validateSelecting(interaction: Selecting): Finding[] {
+  const path = `responseInteractions[${interaction.id}]`
   const findings: Finding[] = []
-  const path = `responseInteractions[${interaction.code}]`
-
-  // SEL-001: at least two choices
-  if (interaction.choices.length >= 2) {
-    findings.push(
-      pass(
-        'SEL-001',
-        `Selecting '${interaction.code}' declares ${interaction.choices.length} choices.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'SEL-001',
-        `Selecting '${interaction.code}' must declare at least two choices.`,
-        { path }
-      )
-    )
-  }
-
-  // SEL-002: choice id/code uniqueness
-  const seenIds = new Set<string>()
-  const seenCodes = new Set<string>()
-  let sel002Failed = false
-  for (const choice of interaction.choices) {
-    if (seenIds.has(choice.id) || seenCodes.has(choice.code)) {
-      sel002Failed = true
-      findings.push(
-        fail(
-          'SEL-002',
-          `Duplicate Choice id/code '${choice.code}' in Selecting '${interaction.code}'.`,
-          { path, affectedIds: [choice.id] }
+  findings.push(
+    interaction.choices.length >= 2 &&
+      unique(interaction.choices.map(({ id }) => id))
+      ? pass(
+          'SEL-001',
+          'Selecting declares at least two uniquely identified Choices.'
         )
-      )
-    }
-    seenIds.add(choice.id)
-    seenCodes.add(choice.code)
-  }
-  if (!sel002Failed)
-    findings.push(
-      pass(
-        'SEL-002',
-        `Choice ids/codes are unique in Selecting '${interaction.code}'.`
-      )
-    )
-
-  // SEL-003: 1 <= minSelections <= maxSelections <= choices.length
-  if (
+      : fail(
+          'SEL-001',
+          'Selecting requires at least two Choices with unique identifiers.',
+          { path }
+        )
+  )
+  const boundsValid =
+    Number.isInteger(interaction.minSelections) &&
+    Number.isInteger(interaction.maxSelections) &&
     interaction.minSelections >= 1 &&
     interaction.minSelections <= interaction.maxSelections &&
     interaction.maxSelections <= interaction.choices.length
-  ) {
-    findings.push(
-      pass(
-        'SEL-003',
-        `Selection cardinality bounds are valid for '${interaction.code}'.`
-      )
+  findings.push(
+    boundsValid
+      ? pass('SEL-002', 'Selection limits are valid.')
+      : fail(
+          'SEL-002',
+          'Selecting requires 1 <= minSelections <= maxSelections <= choices.count.',
+          { path }
+        )
+  )
+  const correctCount = interaction.choices.filter(
+    ({ isCorrect }) => isCorrect
+  ).length
+  findings.push(
+    correctCount >= 1 &&
+      correctCount >= interaction.minSelections &&
+      correctCount <= interaction.maxSelections
+      ? pass(
+          'SEL-003',
+          'The exact correct Choice set is compatible with selection limits.'
+        )
+      : fail(
+          'SEL-003',
+          'Correct Choices must form a non-empty response within selection limits.',
+          { path }
+        )
+  )
+  const standalone = interaction.choices.filter(
+    (choice) => !choice.workspaceStimulusRef
+  )
+  const policyValid =
+    (standalone.length >= 2 &&
+      interaction.standaloneChoiceOrderPolicy !== undefined) ||
+    (standalone.length <= 1 &&
+      interaction.standaloneChoiceOrderPolicy === undefined)
+  findings.push(
+    policyValid
+      ? pass('SEL-004', 'standaloneChoiceOrderPolicy cardinality is valid.')
+      : fail(
+          'SEL-004',
+          'standaloneChoiceOrderPolicy exists iff there are at least two standalone Choices.',
+          { path }
+        )
+  )
+  findings.push(
+    standalone.every(
+      (choice) => !choice.placementSpecification && !choice.sourceAnchor
     )
-  } else {
-    findings.push(
-      fail(
-        'SEL-003',
-        `Selecting '${interaction.code}' requires 1 <= minSelections (${interaction.minSelections}) <= maxSelections (${interaction.maxSelections}) <= choices.length (${interaction.choices.length}).`,
-        { path }
-      )
-    )
-  }
-
-  // SEL-004: at least one correct choice
-  const correctCount = interaction.choices.filter((c) => c.isCorrect).length
-  if (correctCount >= 1) {
-    findings.push(
-      pass(
-        'SEL-004',
-        `Selecting '${interaction.code}' declares ${correctCount} correct choice(s).`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'SEL-004',
-        `Selecting '${interaction.code}' must declare at least one correct choice.`,
-        { path }
-      )
-    )
-  }
-
-  // SEL-005: minSelections <= correctCount <= maxSelections
-  if (
-    correctCount >= interaction.minSelections &&
-    correctCount <= interaction.maxSelections
-  ) {
-    findings.push(
-      pass(
-        'SEL-005',
-        `Correct choice count (${correctCount}) is within selection bounds for '${interaction.code}'.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'SEL-005',
-        `Selecting '${interaction.code}' has ${correctCount} correct choice(s), outside [${interaction.minSelections}, ${interaction.maxSelections}].`,
-        { path }
-      )
-    )
-  }
-
+      ? pass('SEL-005', 'Standalone Choices have no Workspace placement.')
+      : fail(
+          'SEL-005',
+          'A standalone Choice cannot declare placementSpecification or sourceAnchor.',
+          { path }
+        )
+  )
   return findings
 }
-
-// ---------------------------------------------------------------------------
-// ORD — Ordering
-// ---------------------------------------------------------------------------
 
 export function validateOrdering(interaction: Ordering): Finding[] {
+  const path = `responseInteractions[${interaction.id}]`
   const findings: Finding[] = []
-  const path = `responseInteractions[${interaction.code}]`
-
-  // ORD-001: at least two items
-  if (interaction.orderingItems.length >= 2) {
-    findings.push(
-      pass(
-        'ORD-001',
-        `Ordering '${interaction.code}' declares ${interaction.orderingItems.length} items.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'ORD-001',
-        `Ordering '${interaction.code}' must declare at least two items.`,
-        { path }
-      )
-    )
-  }
-
-  // ORD-002: item id/code uniqueness
-  const seenIds = new Set<string>()
-  const seenCodes = new Set<string>()
-  let ord002Failed = false
-  for (const item of interaction.orderingItems) {
-    if (seenIds.has(item.id) || seenCodes.has(item.code)) {
-      ord002Failed = true
-      findings.push(
-        fail(
-          'ORD-002',
-          `Duplicate OrderingItem id/code '${item.code}' in Ordering '${interaction.code}'.`,
-          { path, affectedIds: [item.id] }
+  findings.push(
+    interaction.orderingItems.length >= 2 &&
+      unique(interaction.orderingItems.map(({ id }) => id))
+      ? pass(
+          'ORD-001',
+          'Ordering items are sufficient and uniquely identified.'
         )
-      )
-    }
-    seenIds.add(item.id)
-    seenCodes.add(item.code)
-  }
-  if (!ord002Failed)
-    findings.push(
-      pass(
-        'ORD-002',
-        `OrderingItem ids/codes are unique in Ordering '${interaction.code}'.`
-      )
-    )
-
-  // ORD-003: correctOrder refs resolve to existing items (also checked by QD-VAL-004, but reported locally too)
-  const itemIds = new Set(interaction.orderingItems.map((i) => i.id))
-  const unresolved = interaction.correctOrder.filter((ref) => !itemIds.has(ref))
-  if (unresolved.length === 0) {
-    findings.push(
-      pass(
-        'ORD-003',
-        `correctOrder references resolve in Ordering '${interaction.code}'.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'ORD-003',
-        `correctOrder in Ordering '${interaction.code}' references unknown item(s): ${unresolved.join(', ')}.`,
-        { path }
-      )
-    )
-  }
-
-  // ORD-004: correctOrder is a permutation of orderingItems (same length, each item exactly once)
-  const uniqueRefs = new Set(interaction.correctOrder)
-  const isPermutation =
-    interaction.correctOrder.length === interaction.orderingItems.length &&
-    uniqueRefs.size === interaction.orderingItems.length &&
-    [...itemIds].every((id) => uniqueRefs.has(id))
-  if (isPermutation) {
-    findings.push(
-      pass(
-        'ORD-004',
-        `correctOrder is a valid permutation of all items in Ordering '${interaction.code}'.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'ORD-004',
-        `correctOrder in Ordering '${interaction.code}' must contain every OrderingItem exactly once.`,
-        { path }
-      )
-    )
-  }
-
+      : fail(
+          'ORD-001',
+          'Ordering requires at least two uniquely identified items.',
+          { path }
+        )
+  )
+  const itemIds = interaction.orderingItems.map(({ id }) => id)
+  const correct = interaction.correctOrder
+  const permutation =
+    correct.length === itemIds.length &&
+    unique(correct) &&
+    itemIds.every((id) => correct.includes(id))
+  findings.push(
+    permutation
+      ? pass('ORD-002', 'correctOrder contains every item exactly once.')
+      : fail(
+          'ORD-002',
+          'correctOrder must contain every OrderingItem exactly once.',
+          { path }
+        )
+  )
   return findings
 }
-
-// ---------------------------------------------------------------------------
-// REL — Relating
-// ---------------------------------------------------------------------------
 
 export function validateRelating(interaction: Relating): Finding[] {
+  const path = `responseInteractions[${interaction.id}]`
   const findings: Finding[] = []
-  const path = `responseInteractions[${interaction.code}]`
-
-  // REL-001: exactly one source set and one target set (structurally guaranteed by the
-  // model shape; validated defensively for data coming from untyped sources such as JSON).
-  if (interaction.sourceSet && interaction.targetSet) {
-    findings.push(
-      pass(
-        'REL-001',
-        `Relating '${interaction.code}' declares exactly one source set and one target set.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'REL-001',
-        `Relating '${interaction.code}' must declare exactly one source set and one target set.`,
-        { path }
-      )
-    )
-  }
-
-  // REL-002: both sets non-empty
-  if (
-    interaction.sourceSet.relatingElements.length >= 1 &&
-    interaction.targetSet.relatingElements.length >= 1
-  ) {
-    findings.push(
-      pass(
-        'REL-002',
-        `Both RelatingSets in '${interaction.code}' contain at least one element.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'REL-002',
-        `Both RelatingSets in '${interaction.code}' must contain at least one element.`,
-        { path }
-      )
-    )
-  }
-
-  // REL-003: element id/code uniqueness within the interaction (across both sets)
-  const allElements = [
-    ...interaction.sourceSet.relatingElements,
-    ...interaction.targetSet.relatingElements,
-  ]
-  const seenIds = new Set<string>()
-  const seenCodes = new Set<string>()
-  let rel003Failed = false
-  for (const el of allElements) {
-    if (seenIds.has(el.id) || seenCodes.has(el.code)) {
-      rel003Failed = true
-      findings.push(
-        fail(
-          'REL-003',
-          `Duplicate RelatingElement id/code '${el.code}' in Relating '${interaction.code}'.`,
-          { path, affectedIds: [el.id] }
+  const sourceIds = interaction.sourceSet.relatingElements.map(({ id }) => id)
+  const targetIds = interaction.targetSet.relatingElements.map(({ id }) => id)
+  findings.push(
+    sourceIds.length > 0 &&
+      targetIds.length > 0 &&
+      unique([...sourceIds, ...targetIds])
+      ? pass(
+          'REL-001',
+          'Relating sets are non-empty and identifiers resolve unambiguously.'
         )
-      )
-    }
-    seenIds.add(el.id)
-    seenCodes.add(el.code)
-  }
-  if (!rel003Failed)
-    findings.push(
-      pass(
-        'REL-003',
-        `RelatingElement ids/codes are unique in Relating '${interaction.code}'.`
-      )
-    )
-
-  const sourceIds = new Set(
-    interaction.sourceSet.relatingElements.map((e) => e.id)
+      : fail(
+          'REL-001',
+          'Both Relating sets must be non-empty with unambiguous element identifiers.',
+          { path }
+        )
   )
-  const targetIds = new Set(
-    interaction.targetSet.relatingElements.map((e) => e.id)
+  const pairs = interaction.correctRelations.map(
+    ({ sourceElementRef, targetElementRef }) =>
+      `${sourceElementRef}::${targetElementRef}`
   )
-
-  // REL-004 / REL-005: correct relation endpoints belong to the correct set
-  const badSourceRefs = interaction.correctRelations.filter(
-    (r) => !sourceIds.has(r.sourceElementRef)
+  const refsValid = interaction.correctRelations.every(
+    ({ sourceElementRef, targetElementRef }) =>
+      sourceIds.includes(sourceElementRef) &&
+      targetIds.includes(targetElementRef)
   )
-  if (badSourceRefs.length === 0) {
-    findings.push(
-      pass(
-        'REL-004',
-        `All correctRelations source endpoints belong to the source set in '${interaction.code}'.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'REL-004',
-        `Relating '${interaction.code}' has correctRelations whose source endpoint is not in the source set.`,
-        { path }
-      )
-    )
-  }
-  const badTargetRefs = interaction.correctRelations.filter(
-    (r) => !targetIds.has(r.targetElementRef)
+  findings.push(
+    interaction.correctRelations.length > 0 && refsValid && unique(pairs)
+      ? pass(
+          'REL-002',
+          'Correct relations form a non-empty set with valid references.'
+        )
+      : fail(
+          'REL-002',
+          'correctRelations must be non-empty, unique, and reference the corresponding sets.',
+          { path }
+        )
   )
-  if (badTargetRefs.length === 0) {
-    findings.push(
-      pass(
-        'REL-005',
-        `All correctRelations target endpoints belong to the target set in '${interaction.code}'.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'REL-005',
-        `Relating '${interaction.code}' has correctRelations whose target endpoint is not in the target set.`,
-        { path }
-      )
-    )
-  }
-
-  // REL-006: no duplicate (source, target) pair
-  const pairKeys = interaction.correctRelations.map(
-    (r) => `${r.sourceElementRef}::${r.targetElementRef}`
-  )
-  const uniquePairs = new Set(pairKeys)
-  if (uniquePairs.size === pairKeys.length) {
-    findings.push(
-      pass(
-        'REL-006',
-        `correctRelations contains no duplicate pairs in '${interaction.code}'.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'REL-006',
-        `correctRelations contains duplicate (source, target) pairs in '${interaction.code}'.`,
-        { path }
-      )
-    )
-  }
-
-  // REL-007: endpoint cardinalities respect mappingType
-  const sourceCounts = countBy(
+  const sourceDegree = degree(
     interaction.correctRelations.map((r) => r.sourceElementRef)
   )
-  const targetCounts = countBy(
+  const targetDegree = degree(
     interaction.correctRelations.map((r) => r.targetElementRef)
   )
-  const sourceMax =
-    interaction.mappingType === 'OneToOne' ||
-    interaction.mappingType === 'ManyToOne'
-      ? 1
-      : Infinity
-  const targetMax =
-    interaction.mappingType === 'OneToOne' ||
-    interaction.mappingType === 'OneToMany'
-      ? 1
-      : Infinity
-  const sourceViolations = [...sourceCounts.entries()].filter(
-    ([, count]) => count > sourceMax
+  const cardinalityValid =
+    interaction.mappingType === 'ManyToMany' ||
+    (interaction.mappingType === 'OneToOne' &&
+      max(sourceDegree) <= 1 &&
+      max(targetDegree) <= 1) ||
+    (interaction.mappingType === 'OneToMany' && max(targetDegree) <= 1) ||
+    (interaction.mappingType === 'ManyToOne' && max(sourceDegree) <= 1)
+  findings.push(
+    cardinalityValid
+      ? pass('REL-003', 'Correct relations satisfy mapping cardinality.')
+      : fail('REL-003', 'correctRelations violate mappingType cardinality.', {
+          path,
+        })
   )
-  const targetViolations = [...targetCounts.entries()].filter(
-    ([, count]) => count > targetMax
+  const participationValid =
+    interaction.sourceParticipationPolicy === 'Optional' ||
+    sourceIds.every((id) => sourceDegree.get(id))
+  findings.push(
+    participationValid
+      ? pass('REL-004', 'Source participation policy is satisfied.')
+      : fail(
+          'REL-004',
+          'Required source participation must cover every source element.',
+          { path }
+        )
   )
-  if (sourceViolations.length === 0 && targetViolations.length === 0) {
-    findings.push(
-      pass(
-        'REL-007',
-        `correctRelations cardinalities are consistent with mappingType '${interaction.mappingType}' in '${interaction.code}'.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'REL-007',
-        `correctRelations cardinalities violate mappingType '${interaction.mappingType}' in '${interaction.code}'.`,
-        { path }
-      )
-    )
-  }
-
-  // REL-008: Required source participation
-  if (interaction.sourceParticipationPolicy === 'Required') {
-    const participating = new Set(
-      interaction.correctRelations.map((r) => r.sourceElementRef)
-    )
-    const missing = interaction.sourceSet.relatingElements.filter(
-      (e) => !participating.has(e.id)
-    )
-    if (missing.length === 0) {
-      findings.push(
-        pass(
-          'REL-008',
-          `All source elements participate in at least one correctRelation in '${interaction.code}'.`
-        )
-      )
-    } else {
-      findings.push(
-        fail(
-          'REL-008',
-          `Relating '${interaction.code}' has sourceParticipationPolicy 'Required' but ${missing.length} source element(s) do not participate in any correctRelation.`,
-          { path, affectedIds: missing.map((e) => e.id) }
-        )
-      )
-    }
-  } else {
-    findings.push(
-      pass(
-        'REL-008',
-        `sourceParticipationPolicy is 'Optional' in '${interaction.code}'; no participation requirement to check.`
-      )
-    )
-  }
-
-  // REL-009: at least one correct relation
-  if (interaction.correctRelations.length >= 1) {
-    findings.push(
-      pass(
-        'REL-009',
-        `Relating '${interaction.code}' declares at least one correctRelation.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'REL-009',
-        `Relating '${interaction.code}' must declare at least one correctRelation.`,
-        { path }
-      )
-    )
-  }
-
   return findings
 }
 
-function countBy(values: string[]): Map<string, number> {
-  const counts = new Map<string, number>()
-  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
-  return counts
+function unique(values: string[]): boolean {
+  return new Set(values).size === values.length
+}
+function degree(values: string[]): Map<string, number> {
+  const result = new Map<string, number>()
+  values.forEach((value) => result.set(value, (result.get(value) ?? 0) + 1))
+  return result
+}
+function max(values: Map<string, number>): number {
+  return Math.max(0, ...values.values())
 }

@@ -1,6 +1,6 @@
 /**
- * Kuhn's algorithm (augmenting-path bipartite matching), used to decide CMP-015:
- * whether every DropTargetGap can be assigned a distinct "usage slot" of an
+ * Kuhn's algorithm (augmenting-path bipartite matching), used to decide whether
+ * every ItemGap can be assigned a distinct "usage slot" of an
  * acceptable CompletingItem without exceeding any item's usageLimit.
  *
  * Each item with usageLimit N is expanded into N independent slots (an

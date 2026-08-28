@@ -27,7 +27,7 @@ export class QdIndex {
 
     this.associationsByPair = new Map()
     this.associationsByInteraction = new Map()
-    for (const assoc of qd.interactionStimulusAssociations) {
+    for (const assoc of qd.associations) {
       const pairKey = `${assoc.interactionRef}::${assoc.stimulusRef}`
       const pairList = this.associationsByPair.get(pairKey) ?? []
       pairList.push(assoc)
