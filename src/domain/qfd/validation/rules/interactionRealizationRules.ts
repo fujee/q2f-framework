@@ -95,18 +95,11 @@ function validateRealization(
         nonEmptyId(realization.submissionSite.id)
       )
     case 'MarkingRealization':
-      return (
-        interaction.type === 'Marking' &&
-        context.qd.associations.some(
-          ({ interactionRef, stimulusRef, role }) =>
-            interactionRef === interaction.id &&
-            role === 'Workspace' &&
-            context.serves(
-              realization.workspaceRealizationRef,
-              stimulusRef,
-              interaction.id
-            )
-        )
+      if (interaction.type !== 'Marking') return false
+      return validateMarking(
+        realization.workspaceRealizationRef,
+        interaction.id,
+        context
       )
   }
 }
@@ -183,12 +176,30 @@ function validateSelecting(
   return (
     standaloneValid &&
     workspacesValid &&
-    realization.workspaceRealizations.length ===
-      new Set(
-        workspaceChoices.map(({ workspaceStimulusRef }) => workspaceStimulusRef)
-      ).size &&
     JSON.stringify(seenChoices.sort()) ===
       JSON.stringify(expectedWorkspaceChoices)
+  )
+}
+
+function validateMarking(
+  workspaceRealizationRef: string,
+  interactionId: string,
+  context: QfdValidationContext
+): boolean {
+  const workspaceAssociations = context.qd.associations.filter(
+    ({ interactionRef, role }) =>
+      interactionRef === interactionId && role === 'Workspace'
+  )
+  if (workspaceAssociations.length !== 1) return false
+  const [{ stimulusRef }] = workspaceAssociations
+  const concreteSurfaces = context.qfd.stimulusRealizations.filter(
+    (realization) =>
+      realization.stimulusRef === stimulusRef &&
+      realization.servedInteractionRefs.includes(interactionId)
+  )
+  return (
+    concreteSurfaces.length === 1 &&
+    concreteSurfaces[0].id === workspaceRealizationRef
   )
 }
 

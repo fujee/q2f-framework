@@ -200,6 +200,26 @@ describe('Selecting, Ordering, and Relating structures', () => {
     expectPass(referenced)
   })
 
+  it('allows Choices on one QD Workspace Stimulus to use different concrete SRs', () => {
+    const qfd = cloneQfd()
+    qfd.stimulusRealizations.push({
+      ...structuredClone(qfd.stimulusRealizations[0]),
+      id: 'sr-select-second',
+    })
+    appendRootPlacement(qfd, 'StimulusRealization', 'sr-select-second')
+    const selecting = qfd.interactionRealizations[0]
+    if (selecting.type !== 'SelectingRealization') throw new Error()
+    const secondChoice =
+      selecting.workspaceRealizations[0].choiceRealizations.pop()
+    if (!secondChoice) throw new Error('fixture drift')
+    selecting.workspaceRealizations.push({
+      stimulusRealizationRef: 'sr-select-second',
+      mode: 'DirectSelection',
+      choiceRealizations: [secondChoice],
+    })
+    expectPass(qfd)
+  })
+
   it('rejects invalid workspace mode cardinality and wrong Choice ownership', () => {
     const direct = buildValidQfd()
     const directSelecting = direct.interactionRealizations[0]
@@ -223,6 +243,31 @@ describe('Selecting, Ordering, and Relating structures', () => {
     ownershipSelecting.workspaceRealizations[0].choiceRealizations[0].choiceRef =
       'standalone-a'
     expectFailure(ownership, 'QFD-TYPE-001')
+  })
+
+  it('rejects missing, duplicate, and wrong-SR Workspace Choice bindings', () => {
+    const missing = cloneQfd()
+    const missingSelecting = missing.interactionRealizations[0]
+    if (missingSelecting.type !== 'SelectingRealization') throw new Error()
+    missingSelecting.workspaceRealizations[0].choiceRealizations.pop()
+    expectFailure(missing, 'QFD-TYPE-001')
+
+    const duplicate = cloneQfd()
+    const duplicateSelecting = duplicate.interactionRealizations[0]
+    if (duplicateSelecting.type !== 'SelectingRealization') throw new Error()
+    duplicateSelecting.workspaceRealizations[0].choiceRealizations.push(
+      structuredClone(
+        duplicateSelecting.workspaceRealizations[0].choiceRealizations[0]
+      )
+    )
+    expectFailure(duplicate, 'QFD-TYPE-001')
+
+    const wrongSr = cloneQfd()
+    const wrongSrSelecting = wrongSr.interactionRealizations[0]
+    if (wrongSrSelecting.type !== 'SelectingRealization') throw new Error()
+    wrongSrSelecting.workspaceRealizations[0].stimulusRealizationRef =
+      'sr-complete'
+    expectFailure(wrongSr, 'QFD-TYPE-001')
   })
 
   it('accepts both Ordering modes and rejects incomplete/duplicate items', () => {
@@ -355,6 +400,23 @@ describe('remaining realization types, precedence, and dependencies', () => {
         realization.submissionSite.id = ''
       expectFailure(qfd, 'QFD-TYPE-001')
     }
+  })
+
+  it('accepts one concrete SR for the Marking Workspace association', () => {
+    expectPass(validQfd)
+  })
+
+  it('rejects two concrete SRs serving the Marking Workspace association', () => {
+    const marking = cloneQfd()
+    marking.stimulusRealizations.push({
+      ...structuredClone(marking.stimulusRealizations[2]),
+      id: 'sr-mark-second',
+    })
+    appendRootPlacement(marking, 'StimulusRealization', 'sr-mark-second')
+    expectFailure(marking, 'QFD-TYPE-001')
+  })
+
+  it('rejects a Marking Workspace ref to another interaction/stimulus SR', () => {
     const marking = cloneQfd()
     const markingRealization = marking.interactionRealizations[7]
     if (markingRealization.type !== 'MarkingRealization') throw new Error()

@@ -58,6 +58,16 @@ export const qfdTestQd: QuestionDefinition = {
             payload: { implementationLocator: '[choice]' },
           },
         },
+        {
+          id: 'workspace-choice-2',
+          semanticContent: 'Second workspace choice',
+          isCorrect: false,
+          workspaceStimulusRef: 'stim-select',
+          sourceAnchor: {
+            kind: 'TextAnchor',
+            payload: { implementationLocator: '[choice-2]' },
+          },
+        },
       ],
     },
     {
@@ -230,6 +240,13 @@ export function buildValidQfd(
             realizationAnchor: {
               kind: 'TextRealizationAnchor' as const,
               payload: { marker: '[choice]' },
+            },
+          },
+          {
+            choiceRef: 'workspace-choice-2',
+            realizationAnchor: {
+              kind: 'TextRealizationAnchor' as const,
+              payload: { marker: '[choice-2]' },
             },
           },
         ],
