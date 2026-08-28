@@ -486,6 +486,99 @@ describe('QD-QFD conformance — corrective-pass coverage', () => {
     expectStatus(result.findings, 'CONF-CMP-PLAC-001', 'PASS')
   })
 
+  it('QD-anchored RegionAnchor gaps require no QFD placement (CONF-ROLE-WRK/PLAC pass)', () => {
+    const qd: QuestionDefinition = {
+      id: 'qd-anchored',
+      status: 'Draft',
+      categories: [],
+      responseInteractions: [
+        {
+          id: 'i1',
+          code: 'I1',
+          type: 'Completing',
+          completingItems: [
+            {
+              id: 'item',
+              code: 'nucleus',
+              type: 'TextCompletingItem',
+              text: 'Nucleus',
+              usageLimit: 1,
+            },
+          ],
+          completingGaps: [
+            {
+              id: 'g1',
+              code: 'g1',
+              stimulusRef: 'img',
+              type: 'DropTargetGap',
+              anchor: {
+                kind: 'RegionAnchor',
+                x: 0.1,
+                y: 0.2,
+                width: 0.3,
+                height: 0.4,
+              },
+              correctItemRefs: ['item'],
+            },
+          ],
+        },
+      ],
+      stimuli: [
+        {
+          id: 'img',
+          code: 'IMG',
+          type: 'Image',
+          description: 'Diagram',
+          materializationPolicy: 'Fixed',
+          source: '/diagram.png',
+        },
+      ],
+      interactionStimulusAssociations: [
+        {
+          id: 'assoc',
+          interactionRef: 'i1',
+          stimulusRef: 'img',
+          role: 'Workspace',
+        },
+      ],
+      constraints: [],
+    }
+    const qfd: QuestionFormDefinition = {
+      id: 'qfd-anchored',
+      questionDefinitionRef: 'qd-anchored',
+      targetProfileRef: 'InteractiveWebProfile',
+      interactionRealizations: [
+        { id: 'ir-i1', interactionRef: 'i1', mechanism: 'Completion' },
+      ],
+      stimulusRealizations: [
+        { id: 'sr-img', stimulusRef: 'img', mode: 'ReuseSource' },
+      ],
+      rootLayout: {
+        kind: 'Canvas',
+        items: [
+          {
+            child: { kind: 'StimulusBlock', stimulusRealizationRef: 'sr-img' },
+            area: { x: 0, y: 0, width: 1, height: 1 },
+            layer: 0,
+          },
+          {
+            child: {
+              kind: 'InteractionBlock',
+              interactionRealizationRef: 'ir-i1',
+            },
+            area: { x: 0, y: 0, width: 1, height: 1 },
+            layer: 1,
+          },
+        ],
+      },
+    }
+    const result = evaluateConformance(qd, qfd, INTERACTIVE_WEB_PROFILE)
+    expectStatus(result.findings, 'CONF-ROLE-WRK-001', 'PASS')
+    expectStatus(result.findings, 'CONF-ROLE-WRK-002', 'PASS')
+    expectStatus(result.findings, 'CONF-WRK-PLAC-001', 'PASS')
+    expectStatus(result.findings, 'CONF-CMP-PLAC-001', 'PASS')
+  })
+
   it('PASS-only conformance rules are exercised on representative conformant QFDs', () => {
     const q1 = evaluateConformance(
       fx.q1Qd,

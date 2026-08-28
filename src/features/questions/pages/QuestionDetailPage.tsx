@@ -23,7 +23,7 @@ import { STIMULUS_TYPE_MAP } from '@/lib/stimulusTypes'
 import { INTERACTION_TYPE_MAP } from '@/lib/interactionTypes'
 import {
   Pill,
-  renderInteractionDetail,
+  InteractionDetail,
 } from '@/features/questions/components/shared/renderInteractionDetail'
 import { StimulusPreview } from '@/features/questions/components/shared/StimulusPreview'
 import { QuestionFormsSection } from '@/features/questionForms/components/QuestionFormsSection'
@@ -320,7 +320,7 @@ export function QuestionDetailPage() {
                     />
                   )}
                 </div>
-                {renderInteractionDetail(ia)}
+                <InteractionDetail interaction={ia} />
               </div>
             )
           })}

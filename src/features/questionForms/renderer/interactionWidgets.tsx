@@ -1,5 +1,5 @@
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { ArrowDown, ArrowUp, Upload } from 'lucide-react'
+import { ArrowDown, ArrowUp, Upload, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -36,8 +36,13 @@ import {
   type RenderContext,
 } from './renderContext'
 import { useSelection } from './selectionContext'
+import { useCompletion } from './completionContext'
+import { assignmentsForInteraction } from './completionState'
+import { useReportResponse } from './runtimeProgress'
 import { applyItemOrderPolicy } from './itemOrderPolicy'
 import { regionFromPoints } from './markingRegion'
+import { canAddRelation, type Relation } from './relatingRules'
+import { ContainedImage } from './ContainedImage'
 
 // ── Shared pieces ────────────────────────────────────────────────────────────
 
@@ -56,14 +61,24 @@ export function EffectiveInstruction({
 export function StimulusContent({
   stimulus,
   sr,
+  fill = false,
 }: {
   stimulus: Stimulus
   sr?: StimulusRealization
+  /** Fill the parent box (used inside Canvas items so the stimulus occupies
+   * exactly the area the author assigned it). */
+  fill?: boolean
 }) {
   const content = resolveRealizedStimulusContent(stimulus, sr)
   if (stimulus.type === 'Text') {
     return (
-      <div className="whitespace-pre-wrap text-sm leading-7">
+      <div
+        className={
+          fill
+            ? 'h-full w-full overflow-auto whitespace-pre-wrap text-sm leading-7'
+            : 'whitespace-pre-wrap text-sm leading-7'
+        }
+      >
         {content ?? ''}
       </div>
     )
@@ -73,10 +88,20 @@ export function StimulusContent({
       <img
         src={content}
         alt={stimulus.code}
-        className="max-h-72 rounded-md border border-border object-contain"
+        className={
+          fill
+            ? 'pointer-events-none h-full w-full object-contain'
+            : 'max-h-72 rounded-md border border-border object-contain'
+        }
       />
     ) : (
-      <div className="rounded-md border border-dashed border-border p-6 text-xs text-muted-foreground">
+      <div
+        className={
+          fill
+            ? 'flex h-full w-full items-center justify-center text-xs text-muted-foreground'
+            : 'rounded-md border border-dashed border-border p-6 text-xs text-muted-foreground'
+        }
+      >
         No image content
       </div>
     )
@@ -92,7 +117,11 @@ export function StimulusContent({
     <video
       controls
       src={content}
-      className="max-h-72 rounded-md border border-border"
+      className={
+        fill
+          ? 'h-full w-full object-contain'
+          : 'max-h-72 rounded-md border border-border'
+      }
     />
   ) : (
     <div className="text-xs text-muted-foreground">No video content</div>
@@ -103,10 +132,12 @@ function GapWidget({
   gap,
   items = [],
   compact = false,
+  fill = false,
 }: {
   gap: CompletingGap
   items?: CompletingItem[]
   compact?: boolean
+  fill?: boolean
 }) {
   // Gaps render as inline elements so they stay within the surrounding text
   // flow (CompletionWidget inlines them via splitByMarkers).
@@ -140,24 +171,145 @@ function GapWidget({
       )
     case 'DropTargetGap':
       return (
-        <Select>
-          <SelectTrigger
-            className={`inline-flex ${inline} ${
-              compact ? 'h-7 w-36 text-xs' : 'h-8 w-44 text-xs'
-            }`}
-          >
-            <SelectValue placeholder="Choose item" />
-          </SelectTrigger>
-          <SelectContent>
-            {items.map((it) => (
-              <SelectItem key={it.id} value={it.id}>
-                {it.type === 'TextCompletingItem' ? it.text : it.imageRef}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <DropTargetWidget
+          gap={gap}
+          items={items}
+          compact={compact}
+          fill={fill}
+        />
       )
   }
+}
+
+/** Drop-target control for a DropTargetGap. Accepts dragged completing items and
+ * shows the currently assigned item with a remove action. */
+function DropTargetWidget({
+  gap,
+  items,
+  compact = false,
+  fill = false,
+}: {
+  gap: CompletingGap
+  items: CompletingItem[]
+  compact?: boolean
+  fill?: boolean
+}) {
+  const { assignedItem, assignItem, removeItem } = useCompletion()
+  const [over, setOver] = useState(false)
+  const assignedId = assignedItem(gap.id)
+  const assigned = items.find((i) => i.id === assignedId)
+
+  const size = fill
+    ? 'h-full w-full px-1'
+    : compact
+      ? 'h-7 min-w-24 px-2 text-xs'
+      : 'h-8 min-w-32 px-3 text-xs'
+  const state = over
+    ? 'border-primary bg-primary/15 text-primary'
+    : assigned
+      ? 'border-solid border-primary/60 bg-primary/10 text-foreground'
+      : 'border-foreground/30 bg-background/75 text-muted-foreground shadow-sm'
+
+  return (
+    <span
+      onDragOver={(e) => {
+        e.preventDefault()
+        setOver(true)
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault()
+        setOver(false)
+        const draggedId = e.dataTransfer.getData('text/plain')
+        const dragged = items.find((i) => i.id === draggedId)
+        if (dragged) assignItem(gap.id, dragged.id, dragged.usageLimit)
+      }}
+      className={`${
+        fill ? 'flex' : 'inline-flex'
+      } items-center justify-center gap-1 rounded-md border border-dashed text-center align-middle transition-colors ${size} ${state}`}
+    >
+      {assigned ? (
+        <>
+          {assigned.type === 'ImageCompletingItem' ? (
+            <img
+              src={assigned.imageRef}
+              alt={assigned.code}
+              draggable={false}
+              className="max-h-full max-w-full object-contain"
+            />
+          ) : (
+            <span className="min-w-0 truncate">{assigned.text}</span>
+          )}
+          <button
+            type="button"
+            title="Remove"
+            onClick={() => removeItem(gap.id)}
+            className="shrink-0 text-muted-foreground hover:text-destructive"
+          >
+            <X className="size-3" />
+          </button>
+        </>
+      ) : (
+        <>
+          <ArrowDown className="size-3.5 shrink-0" />
+          <span>{fill ? 'Drop' : 'Drop item'}</span>
+        </>
+      )}
+    </span>
+  )
+}
+
+/** Draggable bank of completing items for DropTargetGap interactions. */
+export function CompletionBankWidget({
+  interaction,
+}: {
+  interaction: Completing
+}) {
+  const { assignments } = useCompletion()
+  const usageCount = (itemId: string) =>
+    Object.values(assignments).filter((v) => v === itemId).length
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-[10px] font-semibold uppercase text-muted-foreground">
+        Options:
+      </span>
+      {interaction.completingItems.map((it) => {
+        const inUse = usageCount(it.id) > 0
+        return (
+          <span
+            key={it.id}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', it.id)
+              e.dataTransfer.effectAllowed = 'move'
+            }}
+            title={inUse ? 'Drag again to move it' : 'Drag into a gap'}
+            className={`inline-flex cursor-grab select-none items-center border text-xs ${
+              it.type === 'ImageCompletingItem'
+                ? 'rounded-md p-1'
+                : 'rounded-full px-2.5 py-1'
+            } ${
+              inUse
+                ? 'border-primary/40 bg-primary/5'
+                : 'border-border bg-background hover:border-primary'
+            }`}
+          >
+            {it.type === 'ImageCompletingItem' ? (
+              <img
+                src={it.imageRef}
+                alt={it.code}
+                draggable={false}
+                className="h-10 w-10 rounded object-contain"
+              />
+            ) : (
+              it.text
+            )}
+          </span>
+        )
+      })}
+    </div>
+  )
 }
 
 function Chip({ code, name }: { code: string; name?: string }) {
@@ -174,14 +326,36 @@ export function ResponseElementWidget({
   ctx,
   elementKind,
   elementRef,
+  fill = false,
 }: {
   ctx: RenderContext
   elementKind: 'Choice' | 'OrderingItem' | 'RelatingElement' | 'CompletingGap'
   elementRef: string
+  fill?: boolean
 }) {
-  const { isSelected, toggle } = useSelection()
+  const { isSelected, toggle, selectedIds } = useSelection()
+  const { assignments } = useCompletion()
   const ownerId = findOwningInteractionId(ctx.qd, elementKind, elementRef)
   const owner = ownerId ? ctx.interactionById.get(ownerId) : undefined
+
+  const reportingId =
+    elementKind === 'Choice' || elementKind === 'CompletingGap'
+      ? ownerId
+      : undefined
+  const reportingRaw =
+    elementKind === 'Choice'
+      ? ownerId
+        ? selectedIds(ownerId)
+        : []
+      : elementKind === 'CompletingGap'
+        ? owner?.type === 'Completing'
+          ? assignmentsForInteraction(
+              assignments,
+              owner.completingGaps.map((g) => g.id)
+            )
+          : {}
+        : undefined
+  useReportResponse(reportingId, reportingRaw)
 
   if (elementKind === 'Choice') {
     const choice =
@@ -211,7 +385,9 @@ export function ResponseElementWidget({
   if (elementKind === 'CompletingGap') {
     const gap = ctx.gapById.get(elementRef)
     const items = owner?.type === 'Completing' ? owner.completingItems : []
-    return gap ? <GapWidget gap={gap} items={items} compact /> : null
+    return gap ? (
+      <GapWidget gap={gap} items={items} compact fill={fill} />
+    ) : null
   }
 
   if (elementKind === 'OrderingItem') {
@@ -235,7 +411,8 @@ export function ResponseElementWidget({
 // ── Per-mechanism widgets ────────────────────────────────────────────────────
 
 function ListSelectionWidget({ interaction }: { interaction: Selecting }) {
-  const { isSelected, toggle } = useSelection()
+  const { isSelected, toggle, selectedIds } = useSelection()
+  useReportResponse(interaction.id, selectedIds(interaction.id))
   const single = interaction.maxSelections === 1
   const choices = useMemo(
     () =>
@@ -271,6 +448,7 @@ function ListSelectionWidget({ interaction }: { interaction: Selecting }) {
 
 function DirectOrderingWidget({ interaction }: { interaction: Ordering }) {
   const [ids, setIds] = useState(interaction.orderingItems.map((i) => i.id))
+  useReportResponse(interaction.id, ids)
   const move = (index: number, delta: number) =>
     setIds((prev) => {
       const target = index + delta
@@ -322,6 +500,12 @@ function DirectOrderingWidget({ interaction }: { interaction: Ordering }) {
 
 function OrderNotationWidget({ interaction }: { interaction: Ordering }) {
   const [ranks, setRanks] = useState<Record<string, string>>({})
+  const ordered = interaction.orderingItems
+    .map((item) => ({ id: item.id, rank: Number(ranks[item.id]) }))
+    .filter((entry) => Number.isFinite(entry.rank))
+    .sort((a, b) => a.rank - b.rank)
+    .map((entry) => entry.id)
+  useReportResponse(interaction.id, ordered)
   return (
     <div className="space-y-1.5">
       {interaction.orderingItems.map((item) => (
@@ -347,17 +531,47 @@ function OrderNotationWidget({ interaction }: { interaction: Ordering }) {
 }
 
 function DirectRelationWidget({ interaction }: { interaction: Relating }) {
-  const [pairs, setPairs] = useState<{ source: string; target: string }[]>([])
+  const [pairs, setPairs] = useState<Relation[]>([])
   const [pendingSource, setPendingSource] = useState<string | null>(null)
-
-  const clickTarget = (targetId: string) => {
-    if (!pendingSource) return
-    setPairs((p) => [...p, { source: pendingSource, target: targetId }])
-    setPendingSource(null)
-  }
+  useReportResponse(
+    interaction.id,
+    pairs.map((p) => ({
+      sourceElementRef: p.source,
+      targetElementRef: p.target,
+    }))
+  )
 
   const sourceEls = interaction.sourceSet.relatingElements
   const targetEls = interaction.targetSet.relatingElements
+
+  const clickSource = (id: string) =>
+    setPendingSource((prev) => (prev === id ? null : id))
+
+  const clickTarget = (id: string) => {
+    if (!pendingSource) return
+    if (!canAddRelation(pairs, interaction.mappingType, pendingSource, id))
+      return
+    setPairs((p) => [...p, { source: pendingSource, target: id }])
+    // A source that can no longer be reused must be released after linking.
+    if (
+      interaction.mappingType === 'OneToOne' ||
+      interaction.mappingType === 'ManyToOne'
+    ) {
+      setPendingSource(null)
+    }
+  }
+
+  const removePair = (index: number) =>
+    setPairs((p) => p.filter((_, i) => i !== index))
+
+  const sourceExhausted = (id: string) =>
+    (interaction.mappingType === 'OneToOne' ||
+      interaction.mappingType === 'ManyToOne') &&
+    pairs.some((p) => p.source === id)
+
+  const targetBlocked = (id: string) =>
+    pendingSource !== null &&
+    !canAddRelation(pairs, interaction.mappingType, pendingSource, id)
 
   return (
     <div className="space-y-2">
@@ -370,8 +584,9 @@ function DirectRelationWidget({ interaction }: { interaction: Relating }) {
             <button
               key={s.id}
               type="button"
-              onClick={() => setPendingSource(s.id)}
-              className={`block rounded-md border px-2 py-1 text-left text-sm transition-colors ${
+              disabled={sourceExhausted(s.id)}
+              onClick={() => clickSource(s.id)}
+              className={`block rounded-md border px-2 py-1 text-left text-sm transition-colors disabled:opacity-40 ${
                 pendingSource === s.id
                   ? 'border-primary bg-primary/10'
                   : 'border-border hover:border-primary/50'
@@ -392,8 +607,9 @@ function DirectRelationWidget({ interaction }: { interaction: Relating }) {
             <button
               key={t.id}
               type="button"
+              disabled={targetBlocked(t.id)}
               onClick={() => clickTarget(t.id)}
-              className={`block rounded-md border px-2 py-1 text-left text-sm transition-colors ${
+              className={`block rounded-md border px-2 py-1 text-left text-sm transition-colors disabled:opacity-40 ${
                 pendingSource
                   ? 'border-primary hover:bg-primary/10'
                   : 'border-border'
@@ -411,11 +627,19 @@ function DirectRelationWidget({ interaction }: { interaction: Relating }) {
         <div className="flex flex-wrap gap-1.5">
           {pairs.map((p, i) => (
             <span
-              key={i}
-              className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground"
+              key={`${p.source}:${p.target}`}
+              className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground"
             >
               {sourceEls.find((s) => s.id === p.source)?.code}→
               {targetEls.find((t) => t.id === p.target)?.code}
+              <button
+                type="button"
+                title="Remove relation"
+                onClick={() => removePair(i)}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <X className="size-3" />
+              </button>
             </span>
           ))}
         </div>
@@ -426,9 +650,30 @@ function DirectRelationWidget({ interaction }: { interaction: Relating }) {
 
 function RelationNotationWidget({ interaction }: { interaction: Relating }) {
   const [mapping, setMapping] = useState<Record<string, string>>({})
+  const sourceEls = interaction.sourceSet.relatingElements
+  const targetEls = interaction.targetSet.relatingElements
+
+  const pairsFor = (targetId: string): Relation[] =>
+    targetEls
+      .filter((t) => t.id !== targetId && mapping[t.id])
+      .map((t) => ({ source: mapping[t.id], target: t.id }))
+
+  const pairs = targetEls
+    .filter((t) => mapping[t.id])
+    .map((t) => ({ sourceElementRef: mapping[t.id], targetElementRef: t.id }))
+  useReportResponse(interaction.id, pairs)
+
+  const sourceBlocked = (targetId: string, sourceId: string) =>
+    !canAddRelation(
+      pairsFor(targetId),
+      interaction.mappingType,
+      sourceId,
+      targetId
+    )
+
   return (
     <div className="space-y-1.5">
-      {interaction.targetSet.relatingElements.map((t) => (
+      {targetEls.map((t) => (
         <div key={t.id} className="flex items-center gap-2 text-sm">
           <span className="font-mono text-xs text-muted-foreground">
             {t.code}
@@ -442,13 +687,33 @@ function RelationNotationWidget({ interaction }: { interaction: Relating }) {
               <SelectValue placeholder="Select source" />
             </SelectTrigger>
             <SelectContent>
-              {interaction.sourceSet.relatingElements.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
+              {sourceEls.map((s) => (
+                <SelectItem
+                  key={s.id}
+                  value={s.id}
+                  disabled={sourceBlocked(t.id, s.id)}
+                >
                   {s.code} · {s.name}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+          {mapping[t.id] && (
+            <button
+              type="button"
+              title="Remove relation"
+              onClick={() =>
+                setMapping((m) => {
+                  const next = { ...m }
+                  delete next[t.id]
+                  return next
+                })
+              }
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
         </div>
       ))}
     </div>
@@ -456,8 +721,21 @@ function RelationNotationWidget({ interaction }: { interaction: Relating }) {
 }
 
 function CompletionWidget({ interaction }: { interaction: Completing }) {
+  const { assignments } = useCompletion()
+  useReportResponse(
+    interaction.id,
+    assignmentsForInteraction(
+      assignments,
+      interaction.completingGaps.map((g) => g.id)
+    )
+  )
   const localGaps = interaction.completingGaps.filter((g) => !g.stimulusRef)
   const content = interaction.localContent
+  const bank =
+    interaction.completingGaps.some((g) => g.type === 'DropTargetGap') &&
+    interaction.completingItems.length > 0 ? (
+      <CompletionBankWidget interaction={interaction} />
+    ) : null
 
   if (content) {
     const markerGaps = localGaps.filter(
@@ -465,45 +743,54 @@ function CompletionWidget({ interaction }: { interaction: Completing }) {
     )
     if (markerGaps.length > 0) {
       return (
-        <div className="whitespace-pre-wrap text-sm leading-9">
-          {splitByMarkers(
-            content,
-            markerGaps.map((g) => ({
-              marker: g.anchor?.kind === 'TextAnchor' ? g.anchor.marker : '',
-              node: (
-                <GapWidget
-                  gap={g}
-                  items={interaction.completingItems}
-                  compact
-                />
-              ),
-            }))
-          )}
+        <div className="space-y-3">
+          <div className="whitespace-pre-wrap text-sm leading-9">
+            {splitByMarkers(
+              content,
+              markerGaps.map((g) => ({
+                marker: g.anchor?.kind === 'TextAnchor' ? g.anchor.marker : '',
+                node: (
+                  <GapWidget
+                    gap={g}
+                    items={interaction.completingItems}
+                    compact
+                  />
+                ),
+              }))
+            )}
+          </div>
+          {bank}
         </div>
       )
     }
     return (
-      <div className="space-y-2">
+      <div className="space-y-3">
         <div className="whitespace-pre-wrap text-sm leading-7">{content}</div>
         <div className="flex flex-wrap gap-2">
           {localGaps.map((g) => (
             <GapWidget key={g.id} gap={g} items={interaction.completingItems} />
           ))}
         </div>
+        {bank}
       </div>
     )
   }
 
   return (
-    <div className="flex flex-wrap gap-2">
-      {localGaps.map((g) => (
-        <GapWidget key={g.id} gap={g} items={interaction.completingItems} />
-      ))}
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {localGaps.map((g) => (
+          <GapWidget key={g.id} gap={g} items={interaction.completingItems} />
+        ))}
+      </div>
+      {bank}
     </div>
   )
 }
 
 function ShortEntryWidget({ interaction }: { interaction: ShortInput }) {
+  const [value, setValue] = useState('')
+  useReportResponse(interaction.id, value)
   const type =
     interaction.inputType === 'Text'
       ? 'text'
@@ -511,7 +798,13 @@ function ShortEntryWidget({ interaction }: { interaction: ShortInput }) {
         ? 'number'
         : 'date'
   return (
-    <Input type={type} className="w-56" placeholder={interaction.inputType} />
+    <Input
+      type={type}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      className="w-56"
+      placeholder={interaction.inputType}
+    />
   )
 }
 
@@ -656,7 +949,7 @@ function TextSpanMarking({
   )
 }
 
-function MarkingWidget({
+export function MarkingWidget({
   ctx,
   interaction,
 }: {
@@ -745,64 +1038,68 @@ function MarkingWidget({
       : null
 
   return (
-    <div
-      className="relative inline-block cursor-crosshair select-none overflow-hidden rounded-md border border-border"
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={() => {
-        setDragStart(null)
-        setDragCurrent(null)
-      }}
-    >
-      <img
-        src={content}
-        alt={stimulus.code}
-        draggable={false}
-        className="max-h-72 select-none"
-      />
-      {marks.map((m, i) =>
-        m.kind === 'point' ? (
-          <span
-            key={i}
-            className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground"
-            style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%` }}
-          >
-            ● {i + 1}
-          </span>
-        ) : (
-          <span
-            key={i}
-            className="pointer-events-none absolute border-2 border-primary bg-primary/20"
-            style={{
-              left: `${m.x * 100}%`,
-              top: `${m.y * 100}%`,
-              width: `${m.width * 100}%`,
-              height: `${m.height * 100}%`,
-            }}
-          >
-            <span className="absolute left-0 top-0 rounded-br bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
-              Region {i + 1}
-            </span>
-          </span>
-        )
-      )}
-      {liveRegion && (
-        <span
-          className="pointer-events-none absolute border-2 border-dashed border-primary bg-primary/10"
+    <ContainedImage src={content} alt={stimulus.code} regions={[]}>
+      {(rect) => (
+        <div
+          className="absolute cursor-crosshair select-none"
           style={{
-            left: `${liveRegion.x * 100}%`,
-            top: `${liveRegion.y * 100}%`,
-            width: `${liveRegion.width * 100}%`,
-            height: `${liveRegion.height * 100}%`,
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
           }}
-        />
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={() => {
+            setDragStart(null)
+            setDragCurrent(null)
+          }}
+        >
+          {marks.map((m, i) =>
+            m.kind === 'point' ? (
+              <span
+                key={i}
+                className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground"
+                style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%` }}
+              >
+                ● {i + 1}
+              </span>
+            ) : (
+              <span
+                key={i}
+                className="pointer-events-none absolute border-2 border-primary bg-primary/20"
+                style={{
+                  left: `${m.x * 100}%`,
+                  top: `${m.y * 100}%`,
+                  width: `${m.width * 100}%`,
+                  height: `${m.height * 100}%`,
+                }}
+              >
+                <span className="absolute left-0 top-0 rounded-br bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                  Region {i + 1}
+                </span>
+              </span>
+            )
+          )}
+          {liveRegion && (
+            <span
+              className="pointer-events-none absolute border-2 border-dashed border-primary bg-primary/10"
+              style={{
+                left: `${liveRegion.x * 100}%`,
+                top: `${liveRegion.y * 100}%`,
+                width: `${liveRegion.width * 100}%`,
+                height: `${liveRegion.height * 100}%`,
+              }}
+            />
+          )}
+          <p className="absolute bottom-1 left-1 rounded bg-background/85 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {isRegion ? 'Drag to mark a region' : 'Click to mark'} ·{' '}
+            {marks.length}/{interaction.maxMarks}
+          </p>
+        </div>
       )}
-      <p className="absolute bottom-1 left-1 rounded bg-background/85 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-        {isRegion ? 'Drag to mark a region' : 'Click to mark'} · {marks.length}/
-        {interaction.maxMarks}
-      </p>
-    </div>
+    </ContainedImage>
   )
 }
 

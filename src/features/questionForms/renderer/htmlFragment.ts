@@ -10,10 +10,12 @@ import type {
   Stack,
 } from '@/domain/qfd/model'
 import { findOwningInteractionId } from '@/domain/qfd/layout'
-import { groupCanvasRows, rowGapPx, rowSpan } from './canvasLayout'
+import { CANVAS_BASE_HEIGHT_PX } from './canvasLayout'
 import {
+  anchoredCanvasGapPlacements,
   buildRenderContext,
   interactionBlockRendersWidget,
+  isQdAnchoredGap,
   resolveRealizedStimulusContent,
   type RenderContext,
 } from './renderContext'
@@ -38,9 +40,11 @@ export const FRAGMENT_STYLE = `
 .qfd-img,.qfd-video{max-width:100%;max-height:320px;border-radius:6px}
 .qfd-audio{width:100%}
 .qfd-chip{display:inline-block;border:1px solid #bbb;border-radius:999px;padding:3px 10px;background:#fff;white-space:nowrap}
+.qfd-item-img{display:block;height:40px;width:40px;object-fit:contain;border-radius:4px}
 .qfd-blank{display:inline-block;min-width:110px;border-bottom:1px solid #555;vertical-align:baseline}
 .qfd-blank-sm{min-width:48px}
-.qfd-blank-wide{min-width:160px}
+.qfd-dropzone{display:inline-block;box-sizing:border-box;min-width:110px;min-height:28px;border:1.5px dashed #8a8a8a;border-radius:6px;background:rgba(255,255,255,0.88);text-align:center;vertical-align:middle;box-shadow:0 0 0 2px rgba(255,255,255,0.45)}
+.qfd-dropzone-fill{display:flex;align-items:center;justify-content:center;width:100%;height:100%;min-width:0;min-height:0}
 .qfd-bank{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
 .qfd-bank-label{font-size:11px;color:#555;margin-right:2px}
 .qfd-essay{border:1px solid #999;border-radius:4px;min-height:110px}
@@ -51,8 +55,10 @@ export const FRAGMENT_STYLE = `
 .qfd-missing{color:#b00}
 .qfd-relate{display:flex;gap:40px}
 .qfd-inline{line-height:2.2}
-.qfd-canvas{border:1px dashed #bbb;border-radius:6px;padding:6px}
-.qfd-abs{position:absolute;overflow:visible}
+.qfd-canvas{position:relative;overflow:hidden;border:1px dashed #bbb;border-radius:6px;box-sizing:border-box}
+.qfd-canvas-item{position:absolute;overflow:hidden;box-sizing:border-box}
+.qfd-canvas-text{width:100%;height:100%;overflow:auto;white-space:pre-wrap;font-size:13px}
+.qfd-canvas-img{width:100%;height:100%;object-fit:contain;display:block}
 .qfd-order{margin:0;padding-left:22px}
 .qfd-option-row{display:flex;align-items:center;gap:6px;padding:2px 0}
 `
@@ -101,7 +107,32 @@ function stimulusHtml(ctx: RenderContext, srRef: string): string {
   }
 }
 
-function staticGapInput(gap: { type: string }): string {
+/** Filling variant of stimulusHtml used inside Canvas items, so the stimulus
+ * occupies exactly the area the author assigned it (matching the editor). */
+function stimulusCanvasHtml(ctx: RenderContext, srRef: string): string {
+  const sr = ctx.stimulusRealizationById.get(srRef)
+  const stimulus = sr ? ctx.stimulusById.get(sr.stimulusRef) : undefined
+  if (!stimulus) return `<div class="qfd-missing">[missing stimulus]</div>`
+  const content = resolveRealizedStimulusContent(stimulus, sr)
+  switch (stimulus.type) {
+    case 'Text':
+      return `<div class="qfd-canvas-text">${escapeHtml(content ?? '').replace(/\n/g, '<br/>')}</div>`
+    case 'Image':
+      return content
+        ? `<img class="qfd-canvas-img" src="${escapeHtml(content)}" alt="${escapeHtml(stimulus.code)}"/>`
+        : `<div class="qfd-missing">[no image content]</div>`
+    case 'Audio':
+      return content
+        ? `<audio class="qfd-audio" controls src="${escapeHtml(content)}"></audio>`
+        : `<div class="qfd-missing">[no audio content]</div>`
+    case 'Video':
+      return content
+        ? `<video class="qfd-canvas-img" controls src="${escapeHtml(content)}"></video>`
+        : `<div class="qfd-missing">[no video content]</div>`
+  }
+}
+
+function staticGapInput(gap: { type: string }, fill = false): string {
   switch (gap.type) {
     case 'TextInputGap':
       return `<span class="qfd-blank">&nbsp;</span>`
@@ -110,7 +141,7 @@ function staticGapInput(gap: { type: string }): string {
     case 'DateInputGap':
       return `<span class="qfd-blank">&nbsp;</span>`
     case 'DropTargetGap':
-      return `<span class="qfd-blank qfd-blank-wide">&nbsp;</span>`
+      return `<span class="qfd-dropzone${fill ? ' qfd-dropzone-fill' : ''}">&nbsp;</span>`
   }
   return ''
 }
@@ -126,13 +157,10 @@ function completingBankHtml(
 ): string {
   if (completingItems.length === 0) return ''
   return `<div class="qfd-bank"><span class="qfd-bank-label">Options:</span>${completingItems
-    .map(
-      (it) =>
-        `<span class="qfd-chip">${escapeHtml(
-          it.type === 'TextCompletingItem'
-            ? (it.text ?? '')
-            : (it.imageRef ?? '')
-        )}</span>`
+    .map((it) =>
+      it.type === 'ImageCompletingItem'
+        ? `<span class="qfd-chip"><img class="qfd-item-img" src="${escapeHtml(it.imageRef ?? '')}" alt=""/></span>`
+        : `<span class="qfd-chip">${escapeHtml(it.text ?? '')}</span>`
     )
     .join('')}</div>`
 }
@@ -380,12 +408,24 @@ function spatialNodeHtml(ctx: RenderContext, el: LayoutElement): string {
   if (el.kind === 'InteractionBlock') {
     return interactionWidgetHtml(ctx, el.interactionRealizationRef)
   }
+  if (el.kind === 'StimulusBlock') {
+    return stimulusCanvasHtml(ctx, el.stimulusRealizationRef)
+  }
+  if (
+    el.kind === 'ResponseElementBlock' &&
+    el.elementKind === 'CompletingGap'
+  ) {
+    const gap = ctx.gapById.get(el.elementRef)
+    return gap ? staticGapInput(gap, true) : ''
+  }
   return nodeHtml(ctx, el)
 }
 
 function canvasHtml(ctx: RenderContext, container: Canvas): string {
   // The instruction of an InteractionBlock is hoisted above the surface; its
-  // widget (when it renders visible content) is placed spatially.
+  // widget (when it renders visible content) is placed spatially. Every item is
+  // positioned with the same normalized coordinates used by the editor, so the
+  // preview reproduces the author's Canvas arrangement exactly.
   const headers: string[] = []
   const spatialItems: CanvasItem[] = []
   for (const item of container.items) {
@@ -397,47 +437,42 @@ function canvasHtml(ctx: RenderContext, container: Canvas): string {
       }
       continue
     }
+    if (
+      item.child.kind === 'ResponseElementBlock' &&
+      item.child.elementKind === 'CompletingGap' &&
+      isQdAnchoredGap(ctx, item.child.elementRef)
+    ) {
+      // QD-anchored gaps are positioned relative to the stimulus below,
+      // never by a (stale) QFD placement.
+      continue
+    }
     spatialItems.push(item)
   }
+  for (const placement of anchoredCanvasGapPlacements(ctx, container)) {
+    spatialItems.push({
+      child: {
+        kind: 'ResponseElementBlock',
+        elementKind: 'CompletingGap',
+        elementRef: placement.elementRef,
+      },
+      area: placement.area,
+      layer: placement.layer,
+    })
+  }
 
-  const rows = groupCanvasRows(spatialItems)
-  const rowHtml =
-    rows.length === 0
+  const itemsHtml =
+    spatialItems.length === 0
       ? '[empty canvas]'
-      : rows
-          .map((row, ri) => {
-            const marginTop =
-              ri === 0 ? 0 : rowGapPx(rows[ri - 1].bottom, row.top)
-            const span = rowSpan(row)
-            const overlays = row.overlay
-              .map(
-                (o) =>
-                  `<div class="qfd-abs" style="left:${o.style.leftPct}%;top:${o.style.topPct}%;width:${o.style.widthPct}%;height:${o.style.heightPct}%">${spatialNodeHtml(
-                    ctx,
-                    o.item.child
-                  )}</div>`
-              )
-              .join('')
-            const baseHtml = `<div style="position:relative;margin-left:${
-              row.base.area.x * 100
-            }%;width:${
-              row.base.area.width * 100
-            }%">${spatialNodeHtml(ctx, row.base.child)}${overlays}</div>`
-            const sideHtml = row.side
-              .map(
-                (item) =>
-                  `<div class="qfd-abs" style="left:${item.area.x * 100}%;top:${
-                    ((item.area.y - row.top) / span) * 100
-                  }%;width:${item.area.width * 100}%">${spatialNodeHtml(
-                    ctx,
-                    item.child
-                  )}</div>`
-              )
-              .join('')
-            return `<div style="margin-top:${marginTop}px;position:relative">${baseHtml}${sideHtml}</div>`
-          })
+      : spatialItems
+          .map(
+            (item) =>
+              `<div class="qfd-canvas-item" style="left:${item.area.x * 100}%;top:${item.area.y * 100}%;width:${item.area.width * 100}%;height:${item.area.height * 100}%;z-index:${item.layer}">${spatialNodeHtml(
+                ctx,
+                item.child
+              )}</div>`
+          )
           .join('')
-  return `${headers.join('')}<div class="qfd-canvas">${rowHtml}</div>`
+  return `${headers.join('')}<div class="qfd-canvas" style="height:${CANVAS_BASE_HEIGHT_PX}px">${itemsHtml}</div>`
 }
 
 function inlineHtml(ctx: RenderContext, container: Inline): string {

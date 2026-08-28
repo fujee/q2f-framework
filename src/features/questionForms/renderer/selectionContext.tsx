@@ -10,6 +10,8 @@ import { nextSelection } from './selectionState'
 interface SelectionContextValue {
   /** Whether `elementRef` is selected for the given interaction. */
   isSelected: (interactionId: string, elementRef: string) => boolean
+  /** All selected element refs for the given interaction (order is incidental). */
+  selectedIds: (interactionId: string) => string[]
   /** Toggles a selection slot for `interactionId`, respecting `maxSelections`. */
   toggle: (
     interactionId: string,
@@ -30,6 +32,8 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
     () => ({
       isSelected: (interactionId, elementRef) =>
         selected[interactionId]?.has(elementRef) ?? false,
+      selectedIds: (interactionId) =>
+        Array.from(selected[interactionId] ?? new Set<string>()),
       toggle: (interactionId, elementRef, maxSelections) =>
         setSelected((prev) => ({
           ...prev,

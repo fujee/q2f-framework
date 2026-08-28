@@ -90,5 +90,34 @@ export function computeAddableBlocks(
     }
   }
 
+  // Relating elements from a Permutable set may be placed individually so the
+  // author can define their presentation order (CONF-ORD-001). Fixed sets are
+  // presented in QD order directly and are therefore not offered for reordering.
+  for (const interaction of qd.responseInteractions) {
+    if (interaction.type !== 'Relating') continue
+    if (!draft.mechanisms[interaction.id]) continue
+    const sets = [interaction.sourceSet, interaction.targetSet] as const
+    for (const set of sets) {
+      if (set.elementOrderPolicy !== 'Permutable') continue
+      for (const element of set.relatingElements) {
+        const alreadyPlaced = placed.responseElements.some(
+          (p) =>
+            p.elementKind === 'RelatingElement' && p.elementRef === element.id
+        )
+        if (alreadyPlaced) continue
+        const el: ContentElement = {
+          kind: 'ResponseElementBlock',
+          elementKind: 'RelatingElement',
+          elementRef: element.id,
+        }
+        blocks.push({
+          key: `RelatingElement-${element.id}`,
+          label: `${set.name}: ${element.code} · ${element.name}`,
+          element: el,
+        })
+      }
+    }
+  }
+
   return blocks
 }

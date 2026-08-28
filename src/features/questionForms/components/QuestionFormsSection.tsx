@@ -4,8 +4,16 @@ import { Eye, FileStack, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useQuestionForms } from '../hooks/useQuestionForms'
 import { questionDetailToDefinition } from '../lib/toQuestionDefinition'
-import { computeQfdConformanceStatus } from '../lib/qfdStatus'
+import {
+  computeQfdConformanceStatus,
+  computeQfdFeasibilityStatus,
+  computeQfdValidationStatus,
+} from '../lib/qfdStatus'
 import { ConformanceStatusBadge } from './ConformanceStatusBadge'
+import {
+  FeasibilityStatusBadge,
+  ValidationStatusBadge,
+} from './QfdStatusBadges'
 import { PROFILE_REGISTRY } from '@/domain/qfd/profiles/registry'
 import type { QuestionDetailDto } from '@/api/questions/questionsApi'
 
@@ -58,9 +66,23 @@ export function QuestionFormsSection({
                   realization(s)
                 </span>
               </Link>
-              <ConformanceStatusBadge
-                status={computeQfdConformanceStatus(qd, f)}
-              />
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
+                <span className="inline-flex items-center gap-1">
+                  <ValidationStatusBadge
+                    status={computeQfdValidationStatus(qd, f)}
+                  />
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <FeasibilityStatusBadge
+                    status={computeQfdFeasibilityStatus(qd, f)}
+                  />
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <ConformanceStatusBadge
+                    status={computeQfdConformanceStatus(qd, f)}
+                  />
+                </span>
+              </div>
               <Button
                 size="sm"
                 variant="outline"

@@ -31,7 +31,7 @@ export function InteractionEditorDialog({
       <DialogContent
         className={cn(
           'max-h-[85vh] overflow-y-auto',
-          interaction.type === 'Completing' ? 'max-w-4xl' : 'max-w-2xl'
+          interaction.type === 'Completing' ? 'max-w-6xl' : 'max-w-4xl'
         )}
       >
         <DialogHeader>

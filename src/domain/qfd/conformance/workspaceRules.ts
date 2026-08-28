@@ -1,4 +1,9 @@
-import type { Completing, QuestionDefinition, Selecting } from '../../qd/model'
+import type {
+  Completing,
+  CompletingGap,
+  QuestionDefinition,
+  Selecting,
+} from '../../qd/model'
 import type {
   ContentElement,
   QuestionFormDefinition,
@@ -42,8 +47,21 @@ function isIntegratedWorkspace(
   const sr = qfd.stimulusRealizations.find((r) => r.stimulusRef === stimulusId)
   if (!ir || !sr) return false
   const descriptor = MECHANISM_DESCRIPTORS[ir.mechanism]
+  const interaction = qd.responseInteractions.find(
+    (i) => i.id === interactionId
+  )
+  if (!interaction) return false
 
   if (descriptor.requiresElementLevelPlacement) {
+    // QD-anchored elements reused verbatim (ReuseSource) don't need QFD
+    // placement; when none remain, the QD anchors themselves integrate the
+    // Workspace structure.
+    const needsPlacement = collectPlaceableElementIds(
+      interaction,
+      qfd,
+      stimulusId
+    )
+    if (needsPlacement.length === 0) return true
     return blocks.some(
       (b) =>
         b.kind === 'ResponseElementBlock' &&
@@ -137,7 +155,11 @@ export function validateWorkspaceConformance(
           : interaction.type === 'Completing'
             ? 'CompletingGap'
             : undefined
-      const elementIds = collectPlaceableElementIds(interaction)
+      const elementIds = collectPlaceableElementIds(
+        interaction,
+        qfd,
+        assoc.stimulusRef
+      )
       const interactionBlock = blocks.find(
         (b) =>
           b.kind === 'InteractionBlock' && b.interactionRealizationRef === ir.id
@@ -198,13 +220,32 @@ export function validateWorkspaceConformance(
 }
 
 function collectPlaceableElementIds(
-  interaction: QuestionDefinition['responseInteractions'][number]
+  interaction: QuestionDefinition['responseInteractions'][number],
+  qfd: QuestionFormDefinition,
+  workspaceStimulusRef: string
 ): string[] {
   if (interaction.type === 'Selecting')
     return interaction.choices.map((c) => c.id)
   if (interaction.type === 'Completing')
-    return interaction.completingGaps.map((g) => g.id)
+    return interaction.completingGaps
+      .filter((g) => g.stimulusRef === workspaceStimulusRef)
+      .filter((g) => completingGapRequiresPlacement(g, qfd))
+      .map((g) => g.id)
   return []
+}
+
+/** A Completing gap needs concrete QFD placement unless the QD supplies a
+ * concrete anchor and the host is reused verbatim (ReuseSource) — in that case
+ * the QD anchor is reused (CONF-CMP-PLAC-001) and no QFD placement is required. */
+function completingGapRequiresPlacement(
+  gap: CompletingGap,
+  qfd: QuestionFormDefinition
+): boolean {
+  const sr = gap.stimulusRef
+    ? qfd.stimulusRealizations.find((r) => r.stimulusRef === gap.stimulusRef)
+    : undefined
+  if (gap.anchor && sr?.mode === 'ReuseSource') return false
+  return true
 }
 
 function validateSelectingWorkspace(

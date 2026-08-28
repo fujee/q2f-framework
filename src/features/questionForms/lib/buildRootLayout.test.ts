@@ -94,4 +94,60 @@ describe('suggested layout honors mechanism layout requirements', () => {
       result.findings.find((f) => f.ruleId === 'CONF-PRES-001')?.status
     ).toBe('PASS')
   })
+
+  it('places the Interaction block behind its stimulus and response elements', () => {
+    const qd = fx.q9Qd
+    const store = useQuestionFormEditorStore.getState()
+    store.initForQuestion(qd)
+    store.setMechanism('q9-spatial-select', 'SpatialSelection')
+    const draft = useQuestionFormEditorStore.getState().draft
+    const layout = generateSuggestedRootLayout(qd, draft)
+
+    expect(layout.kind).toBe('Stack')
+    if (layout.kind !== 'Stack') return
+    const canvas = layout.children[0]
+    expect(canvas.kind).toBe('Canvas')
+    if (canvas.kind !== 'Canvas') return
+
+    const interaction = canvas.items.find(
+      (i) => i.child.kind === 'InteractionBlock'
+    )
+    const stimulus = canvas.items.find((i) => i.child.kind === 'StimulusBlock')
+    const elements = canvas.items.filter(
+      (i) => i.child.kind === 'ResponseElementBlock'
+    )
+    expect(interaction).toBeDefined()
+    expect(stimulus).toBeDefined()
+    expect(elements.length).toBeGreaterThan(0)
+
+    // The interaction is a hosting layer: strictly behind everything it hosts.
+    expect(interaction!.layer).toBeLessThan(stimulus!.layer)
+    for (const el of elements) {
+      expect(interaction!.layer).toBeLessThan(el.layer)
+    }
+  })
+
+  it('keeps suggested response elements below the reserved instruction area', () => {
+    const qd = fx.q9Qd
+    const store = useQuestionFormEditorStore.getState()
+    store.initForQuestion(qd)
+    store.setMechanism('q9-spatial-select', 'SpatialSelection')
+    const draft = useQuestionFormEditorStore.getState().draft
+    const layout = generateSuggestedRootLayout(qd, draft)
+
+    expect(layout.kind).toBe('Stack')
+    if (layout.kind !== 'Stack') return
+    const canvas = layout.children[0]
+    expect(canvas.kind).toBe('Canvas')
+    if (canvas.kind !== 'Canvas') return
+
+    const elements = canvas.items.filter(
+      (i) => i.child.kind === 'ResponseElementBlock'
+    )
+    expect(elements.length).toBeGreaterThan(0)
+    // The top ~15% of the Canvas is reserved for the instruction text.
+    for (const el of elements) {
+      expect(el.area.y).toBeGreaterThanOrEqual(0.15)
+    }
+  })
 })

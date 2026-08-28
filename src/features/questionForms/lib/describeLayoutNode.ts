@@ -1,5 +1,11 @@
-import type { QuestionDefinition } from '@/domain/qd/model'
-import type { ContentElement, ResponseElementKind } from '@/domain/qfd/model'
+import type { QuestionDefinition, Stimulus } from '@/domain/qd/model'
+import type {
+  ContentElement,
+  ResponseElementKind,
+  StimulusBlock,
+} from '@/domain/qfd/model'
+import type { QuestionFormDraft } from '../store/questionFormEditorStore'
+import { stimulusRealizationRef } from './assembleQfd'
 
 export function describeContentElement(
   el: ContentElement,
@@ -16,6 +22,25 @@ export function describeContentElement(
       (i) => i.id === interactionId
     )
     return `Interaction · ${interaction?.code ?? interactionId}`
+  }
+  if (
+    el.kind === 'ResponseElementBlock' &&
+    el.elementKind === 'RelatingElement'
+  ) {
+    for (const interaction of qd.responseInteractions) {
+      if (interaction.type !== 'Relating') continue
+      const source = interaction.sourceSet.relatingElements.find(
+        (x) => x.id === el.elementRef
+      )
+      if (source)
+        return `${interaction.sourceSet.name}: ${source.code} · ${source.name}`
+      const target = interaction.targetSet.relatingElements.find(
+        (x) => x.id === el.elementRef
+      )
+      if (target)
+        return `${interaction.targetSet.name}: ${target.code} · ${target.name}`
+    }
+    return `RelatingElement · ${el.elementRef}`
   }
   return `${el.elementKind} · ${findElementLabel(el.elementKind, el.elementRef, qd)}`
 }
@@ -47,4 +72,43 @@ function findElementLabel(
     }
   }
   return id
+}
+
+export interface ResolvedStimulusBlock {
+  stimulus: Stimulus
+  content: string | undefined
+}
+
+/** Resolves a StimulusBlock to the QD Stimulus it realizes plus the concrete
+ * content to display (QD source content for ReuseSource, realizedContent for
+ * Adapt/Materialize modes). Uses the same id rules as the assembler so the
+ * layout editor and the persisted QFD always agree on references. */
+export function resolveStimulusBlock(
+  el: StimulusBlock,
+  qd: QuestionDefinition,
+  draft: Pick<
+    QuestionFormDraft,
+    'stimulusRealizations' | 'stimulusRealizationIds'
+  >
+): ResolvedStimulusBlock | undefined {
+  const stimulus = qd.stimuli.find(
+    (s) => stimulusRealizationRef(draft, s.id) === el.stimulusRealizationRef
+  )
+  if (!stimulus) return undefined
+
+  const draftSr = draft.stimulusRealizations[stimulus.id]
+  const mode =
+    draftSr?.mode ??
+    (stimulus.materializationPolicy === 'SpecificationBased'
+      ? 'MaterializeFromSpecification'
+      : 'ReuseSource')
+
+  const content =
+    mode === 'ReuseSource'
+      ? stimulus.type === 'Text'
+        ? stimulus.content
+        : stimulus.source
+      : draftSr?.realizedContent?.trim()
+
+  return { stimulus, content }
 }

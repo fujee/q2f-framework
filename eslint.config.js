@@ -24,7 +24,14 @@ export default defineConfig([
       '@typescript-eslint/no-empty-object-type': 'off',
       'react-refresh/only-export-components': [
         'error',
-        { allowExportNames: ['useSelection'] },
+        {
+          allowExportNames: [
+            'useSelection',
+            'useCompletion',
+            'useRuntimeProgress',
+            'useReportResponse',
+          ],
+        },
       ],
     },
   },

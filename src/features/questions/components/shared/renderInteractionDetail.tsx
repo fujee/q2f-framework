@@ -24,7 +24,11 @@ export function Pill({
 
 /** Shared type-specific detail rendering for a ResponseInteraction, used by both
  * the wizard's review step and the read-only question detail page. */
-export function renderInteractionDetail(ia: ResponseInteraction): ReactNode {
+export function InteractionDetail({
+  interaction: ia,
+}: {
+  interaction: ResponseInteraction
+}) {
   switch (ia.type) {
     case 'Selecting': {
       return (
@@ -53,8 +57,15 @@ export function renderInteractionDetail(ia: ResponseInteraction): ReactNode {
                 ) : (
                   <Circle className="size-3 shrink-0" />
                 )}
-                <span className="w-6 font-mono opacity-60">{c.code}</span>
-                <span>{c.name || <em>no label</em>}</span>
+                <span
+                  className="min-w-0 max-w-[40%] truncate font-mono opacity-60"
+                  title={c.code}
+                >
+                  {c.code}
+                </span>
+                <span className="min-w-0 flex-1" title={c.name ?? undefined}>
+                  {c.name || <em>no label</em>}
+                </span>
               </li>
             ))}
           </ul>

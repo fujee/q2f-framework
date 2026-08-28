@@ -84,4 +84,39 @@ describe('seed data (Q1–Q12 demo questions)', () => {
       }
     }
   })
+
+  it('places Q10 drop targets on the four heart chambers', () => {
+    const form = seedQuestionFormDefinitions.find((f) => f.id === 'qfd-q10-web')
+    expect(form).toBeDefined()
+    const layout = form!.rootLayout
+    expect(layout.kind).toBe('Canvas')
+    if (layout.kind !== 'Canvas') return
+
+    const gaps = layout.items
+      .filter(
+        (i) =>
+          i.child.kind === 'ResponseElementBlock' &&
+          i.child.elementKind === 'CompletingGap'
+      )
+      .map((i) => ({
+        id: (i.child as { elementRef: string }).elementRef,
+        area: i.area,
+      }))
+    expect(gaps).toHaveLength(4)
+    const byId = new Map(gaps.map((g) => [g.id, g.area]))
+
+    const la = byId.get('gap-la')!
+    const ra = byId.get('gap-ra')!
+    const lv = byId.get('gap-lv')!
+    const rv = byId.get('gap-rv')!
+
+    // Left chambers sit on the left half, right chambers on the right half.
+    expect(la.x + la.width).toBeLessThan(0.5)
+    expect(lv.x + lv.width).toBeLessThan(0.5)
+    expect(ra.x).toBeGreaterThan(0.5)
+    expect(rv.x).toBeGreaterThan(0.5)
+    // Atria sit above the ventricles.
+    expect(la.y + la.height).toBeLessThan(lv.y)
+    expect(ra.y + ra.height).toBeLessThan(rv.y)
+  })
 })

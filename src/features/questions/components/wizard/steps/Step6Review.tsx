@@ -24,7 +24,7 @@ import { STIMULUS_TYPE_MAP } from '@/lib/stimulusTypes'
 import { INTERACTION_TYPE_MAP } from '@/lib/interactionTypes'
 import {
   Pill,
-  renderInteractionDetail,
+  InteractionDetail,
 } from '@/features/questions/components/shared/renderInteractionDetail'
 import { StimulusPreview } from '@/features/questions/components/shared/StimulusPreview'
 import { draftToQuestionDefinition } from '@/features/questions/lib/draftToQuestionDefinition'
@@ -246,7 +246,7 @@ export function Step6Review({ onPrev }: Step6ReviewProps) {
                     />
                   )}
                 </div>
-                {renderInteractionDetail(ia)}
+                <InteractionDetail interaction={ia} />
               </div>
             )
           })}

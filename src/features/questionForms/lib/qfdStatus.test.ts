@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { computePreviewBlockers } from './qfdStatus'
+import {
+  computePreviewBlockers,
+  computeQfdFeasibilityStatus,
+  computeQfdValidationStatus,
+} from './qfdStatus'
 import * as fx from '@/domain/qfd/fixtures/qfdFixtures'
 import type { QuestionDefinition } from '@/domain/qd/model'
 import type { QuestionFormDefinition } from '@/domain/qfd/model'
@@ -80,5 +84,29 @@ describe('computePreviewBlockers', () => {
       },
     }
     expect(computePreviewBlockers(qd, qfd)).toEqual([])
+  })
+})
+
+describe('computeQfdValidationStatus', () => {
+  it('is PASS for a valid QFD', () => {
+    expect(computeQfdValidationStatus(fx.q1Qd, fx.q1QfdWeb)).toBe('PASS')
+  })
+
+  it('is FAIL for an invalid QFD', () => {
+    expect(computeQfdValidationStatus(fx.q1Qd, fx.q1QfdInvalidRootLayout)).toBe(
+      'FAIL'
+    )
+  })
+})
+
+describe('computeQfdFeasibilityStatus', () => {
+  it('is FEASIBLE for a supported web form', () => {
+    expect(computeQfdFeasibilityStatus(fx.q1Qd, fx.q1QfdWeb)).toBe('FEASIBLE')
+  })
+
+  it('is INFEASIBLE for an unsupported mechanism on paper', () => {
+    expect(
+      computeQfdFeasibilityStatus(fx.q2Qd, fx.q2QfdPaperInvalidMechanism)
+    ).toBe('INFEASIBLE')
   })
 })

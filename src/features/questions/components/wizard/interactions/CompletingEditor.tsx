@@ -596,7 +596,7 @@ export function CompletingEditor({
                   </SelectContent>
                 </Select>
 
-                <div className="flex items-start gap-3">
+                <div className="flex flex-col gap-2">
                   <Select
                     value={anchorMode}
                     onValueChange={(v) =>
@@ -620,7 +620,7 @@ export function CompletingEditor({
                   </Select>
 
                   {gap.anchor?.kind === 'TextAnchor' && (
-                    <div className="flex-1 space-y-1">
+                    <div className="space-y-1">
                       <Input
                         className="h-7 font-mono text-xs"
                         placeholder="{{g1}}"
@@ -642,7 +642,7 @@ export function CompletingEditor({
                   )}
 
                   {gap.anchor?.kind === 'RegionAnchor' && (
-                    <div className="flex-1">
+                    <div>
                       <p className="mb-1 text-[10px] text-muted-foreground">
                         Region (normalised 0–1 relative to image size):
                       </p>
@@ -675,7 +675,7 @@ export function CompletingEditor({
                   )}
 
                   {anchorMode === 'PlacementSpecification' && (
-                    <div className="flex-1">
+                    <div>
                       <Textarea
                         className="text-xs"
                         placeholder="e.g. The marker nearest the largest city label."

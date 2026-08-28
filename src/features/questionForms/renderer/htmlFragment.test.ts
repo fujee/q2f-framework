@@ -13,10 +13,14 @@ import {
   q4QfdWeb,
   q7Qd,
   q7QfdPaper,
+  q8aQd,
+  q8aQfdPaper,
   q8bQd,
   q8bQfdPaper,
   q9Qd,
   q9QfdWeb,
+  q10Qd,
+  q10QfdPaper,
 } from '@/domain/qfd/fixtures/qfdFixtures'
 
 const DATA_URL =
@@ -146,18 +150,85 @@ describe('materialized image content propagates to the renderer', () => {
       },
     }
     const html = buildHtmlFragment(qd, canvasQfd)
-    expect(html).toContain('margin-left:0%')
-    expect(html).toContain('margin-left:30%')
+    expect(html).toContain('left:0%')
+    expect(html).toContain('left:30%')
   })
 })
 
 describe('paper realization and question text', () => {
-  it('renders completing gaps as blanks with a printed option pool, not a dropdown', () => {
+  it('renders completing gaps as prominent drop-zone answer areas with a printed option pool, not a dropdown', () => {
     const html = buildHtmlFragment(q4Qd, q4QfdPaper)
     expect(html).not.toContain('<select')
-    expect(html).toContain('qfd-blank')
+    expect(html).toContain('qfd-dropzone')
     expect(html).toContain('Options:')
     expect(html).toContain('carbon dioxide')
+  })
+
+  it('renders Q10 workspace drop zones as filled, not underline, answer areas', () => {
+    const html = buildHtmlFragment(q10Qd, q10QfdPaper)
+    expect(html).toContain('qfd-dropzone')
+    expect(html).toContain('qfd-dropzone-fill')
+    expect(html).not.toContain('qfd-blank-wide')
+  })
+
+  it('renders image completing options as images, not base64 text', () => {
+    const qd: QuestionDefinition = {
+      id: 'qd-img-items',
+      status: 'Draft',
+      categories: [],
+      responseInteractions: [
+        {
+          id: 'cmp',
+          code: 'CMP',
+          type: 'Completing',
+          localContent: 'Pick the image: {{g1}}.',
+          completingItems: [
+            {
+              id: 'img-item',
+              code: 'img',
+              type: 'ImageCompletingItem',
+              imageRef: DATA_URL,
+              usageLimit: 1,
+            },
+          ],
+          completingGaps: [
+            {
+              id: 'g1',
+              code: 'g1',
+              type: 'DropTargetGap',
+              anchor: { kind: 'TextAnchor', marker: '{{g1}}' },
+              correctItemRefs: ['img-item'],
+            },
+          ],
+        },
+      ],
+      stimuli: [],
+      interactionStimulusAssociations: [],
+      constraints: [],
+    }
+    const qfd: QuestionFormDefinition = {
+      id: 'qfd-img-items',
+      questionDefinitionRef: 'qd-img-items',
+      targetProfileRef: 'ConventionalPaperProfile',
+      interactionRealizations: [
+        { id: 'ir-cmp', interactionRef: 'cmp', mechanism: 'Completion' },
+      ],
+      stimulusRealizations: [],
+      rootLayout: {
+        kind: 'Inline',
+        items: [
+          {
+            child: {
+              kind: 'InteractionBlock',
+              interactionRealizationRef: 'ir-cmp',
+            },
+          },
+        ],
+      },
+    }
+    const html = buildHtmlFragment(qd, qfd)
+    expect(html).toContain('qfd-item-img')
+    expect(html).toContain(`src="${DATA_URL}"`)
   })
 
   it('renders the QD instruction as the question text', () => {
@@ -173,6 +244,13 @@ describe('paper realization and question text', () => {
     expect(html).toContain('Mark the verb phrase in the sentence.')
     // No interactive/web-like control is rendered on paper.
     expect(html).not.toContain('Mark the relevant part of the text above')
+  })
+
+  it('renders the Q8A marking image once, not twice', () => {
+    const html = buildHtmlFragment(q8aQd, q8aQfdPaper)
+    const occurrences = html.split('q8-shapes.png').length - 1
+    expect(occurrences).toBe(1)
+    expect(html).toContain('Place one point inside the circle.')
   })
 
   it('renders each placed SpatialSelection Choice at its canvas position', () => {
@@ -266,5 +344,84 @@ describe('paper Relating realization', () => {
     const html = buildHtmlFragment(q7Qd, q7QfdPaper)
     expect(html).toContain('Physical submission required')
     expect(html).not.toContain('Physical submission area')
+  })
+})
+
+describe('canvas stimulus placement is WYSIWYG', () => {
+  const imgQd: QuestionDefinition = {
+    id: 'qd-wysiwyg',
+    status: 'Draft',
+    categories: [],
+    responseInteractions: [],
+    stimuli: [
+      {
+        id: 'img',
+        code: 'IMG',
+        type: 'Image',
+        description: 'A diagram',
+        materializationPolicy: 'Fixed',
+        source: '/assets/qd.png',
+      },
+    ],
+    interactionStimulusAssociations: [],
+    constraints: [],
+  }
+
+  function canvasWithStimulus(area: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }): QuestionFormDefinition {
+    return {
+      id: 'qfd-wysiwyg',
+      questionDefinitionRef: 'qd-wysiwyg',
+      targetProfileRef: 'InteractiveWebProfile',
+      interactionRealizations: [],
+      stimulusRealizations: [
+        { id: 'sr-img', stimulusRef: 'img', mode: 'ReuseSource' },
+      ],
+      rootLayout: {
+        kind: 'Canvas',
+        items: [
+          {
+            child: { kind: 'StimulusBlock', stimulusRealizationRef: 'sr-img' },
+            area,
+            layer: 0,
+          },
+        ],
+      },
+    }
+  }
+
+  it('positions a centered stimulus at its exact canvas coordinates and fills its area', () => {
+    const html = buildHtmlFragment(
+      imgQd,
+      canvasWithStimulus({ x: 0.25, y: 0.1, width: 0.5, height: 0.8 })
+    )
+    expect(html).toContain('left:25%')
+    expect(html).toContain('top:10%')
+    expect(html).toContain('width:50%')
+    expect(html).toContain('height:80%')
+    expect(html).toContain('qfd-canvas-img')
+    expect(html).toContain('height:480px')
+  })
+
+  it('preserves right and bottom offsets for other stimulus positions', () => {
+    const html = buildHtmlFragment(
+      imgQd,
+      canvasWithStimulus({ x: 0.6, y: 0.7, width: 0.35, height: 0.25 })
+    )
+    expect(html).toContain('left:60%')
+    expect(html).toContain('top:70%')
+    expect(html).toContain('width:35%')
+    expect(html).toContain('height:25%')
+  })
+
+  it('renders overlay choices in the same coordinate system as the stimulus (Q9)', () => {
+    const html = buildHtmlFragment(q9Qd, q9QfdWeb)
+    // The circle choice sits at its normalized area, matching the editor.
+    expect(html).toContain('left:37.5%')
+    expect(html).toContain('top:20%')
   })
 })

@@ -128,7 +128,7 @@ async function handleRequest(event, requestId, requestInterceptedAt) {
     event,
     client,
     requestId,
-    requestInterceptedAt
+    requestInterceptedAt,
   )
 
   // Send back the response clone for the "response:*" life-cycle events.
@@ -144,7 +144,7 @@ async function handleRequest(event, requestId, requestInterceptedAt) {
     // entire stream into the unconsumed clone indefinitely.
     const isEventStreamResponse = response.headers
       .get('content-type')
-      .toLowerCase()
+      ?.toLowerCase()
       .startsWith('text/event-stream')
 
     // Clone the response so both the client and the library could consume it.
@@ -171,7 +171,7 @@ async function handleRequest(event, requestId, requestInterceptedAt) {
       },
       responseClone && responseClone.body
         ? [serializedRequest.body, responseClone.body]
-        : []
+        : [],
     )
   }
 
@@ -193,7 +193,7 @@ async function resolveMainClient(event) {
     return client
   }
 
-  if (client.frameType === 'top-level') {
+  if (client?.frameType === 'top-level') {
     return client
   }
 
@@ -237,7 +237,7 @@ async function getResponse(event, client, requestId, requestInterceptedAt) {
     if (acceptHeader) {
       const values = acceptHeader.split(',').map((value) => value.trim())
       const filteredValues = values.filter(
-        (value) => value !== 'msw/passthrough'
+        (value) => value !== 'msw/passthrough',
       )
 
       if (filteredValues.length > 0) {
@@ -275,7 +275,7 @@ async function getResponse(event, client, requestId, requestInterceptedAt) {
         ...serializedRequest,
       },
     },
-    [serializedRequest.body]
+    [serializedRequest.body],
   )
 
   switch (clientMessage.type) {

@@ -7,7 +7,7 @@ import type {
 import { Controller } from 'react-hook-form'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { RichTextEditor } from '@/components/shared/RichTextEditor'
+import { Textarea } from '@/components/ui/textarea'
 import type { BaseInteractionFormData } from '@/features/questions/validation/interactionSchemas'
 
 interface BaseInteractionEditorProps<
@@ -22,7 +22,7 @@ export function BaseInteractionEditor<
   TFieldValues extends BaseInteractionFormData = BaseInteractionFormData,
 >({ register, control, errors }: BaseInteractionEditorProps<TFieldValues>) {
   return (
-    <div className="grid grid-cols-2 gap-4">
+    <div className="space-y-4">
       <div className="space-y-1.5">
         <Label htmlFor="ia-code">
           Code <span className="text-destructive">*</span>
@@ -45,11 +45,13 @@ export function BaseInteractionEditor<
           name={'instruction' as Path<TFieldValues>}
           control={control}
           render={({ field }) => (
-            <RichTextEditor
+            <Textarea
+              id="ia-instruction"
               value={field.value ?? ''}
               onChange={field.onChange}
               placeholder="Optional instruction shown to respondent…"
-              minimal
+              rows={3}
+              className="resize-y"
             />
           )}
         />

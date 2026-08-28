@@ -13,7 +13,20 @@ import {
   stimulusRealizationRef,
 } from './assembleQfd'
 
-const DEFAULT_REGION = { x: 0.1, y: 0.1, width: 0.2, height: 0.1 }
+/** Fraction of the Canvas height reserved at the top for the interaction's
+ * instruction/question text. Relative (normalized), so it adapts to any Canvas
+ * size instead of assuming a fixed pixel height. */
+const INSTRUCTION_RESERVE_HEIGHT = 0.15
+
+/** Default placeholder region for a placed response element, kept below the
+ * reserved instruction band so suggested placements never cover the question
+ * text at the top of the Interaction. */
+const DEFAULT_REGION = {
+  x: 0.05,
+  y: INSTRUCTION_RESERVE_HEIGHT + 0.05,
+  width: 0.2,
+  height: 0.1,
+}
 
 /** Deterministic transformation assistance only (QFD plan Section 18 / S2.8): produces
  * a *suggested* root layout the author can freely edit afterwards in the Layout step.
@@ -91,9 +104,14 @@ export function generateSuggestedRootLayout(
         } else {
           const items: CanvasItem[] = [
             {
-              child: stimulusBlock,
+              child: interactionBlock,
               area: { x: 0, y: 0, width: 1, height: 1 },
               layer: 0,
+            },
+            {
+              child: stimulusBlock,
+              area: { x: 0, y: 0, width: 1, height: 1 },
+              layer: 1,
             },
             ...elements.map(({ kind, id }, i) => ({
               child: {
@@ -102,13 +120,8 @@ export function generateSuggestedRootLayout(
                 elementRef: id,
               },
               area: DEFAULT_REGION,
-              layer: i + 1,
+              layer: i + 2,
             })),
-            {
-              child: interactionBlock,
-              area: { x: 0, y: 0, width: 1, height: 1 },
-              layer: elements.length + 1,
-            },
           ]
           stackChildren.push({ kind: 'Canvas', items })
         }
@@ -133,12 +146,12 @@ export function generateSuggestedRootLayout(
             kind: 'Canvas',
             items: [
               {
-                child: stimulusBlock,
+                child: interactionBlock,
                 area: { x: 0, y: 0, width: 1, height: 1 },
                 layer: 0,
               },
               {
-                child: interactionBlock,
+                child: stimulusBlock,
                 area: { x: 0, y: 0, width: 1, height: 1 },
                 layer: 1,
               },

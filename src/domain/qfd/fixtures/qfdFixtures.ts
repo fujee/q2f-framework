@@ -481,7 +481,7 @@ const q5Stimulus: Stimulus = {
   type: 'Audio',
   description: 'Three tones',
   materializationPolicy: 'Fixed',
-  source: 'q5-three-tones.wav',
+  source: '/q5-three-tones.wav',
 }
 
 const q5Interaction: ResponseInteraction = {
@@ -539,7 +539,7 @@ const q6Stimulus: Stimulus = {
   type: 'Video',
   description: 'Ball moving left to right',
   materializationPolicy: 'Fixed',
-  source: 'q6-motion.mp4',
+  source: '/q6-motion.mp4',
 }
 
 const q6Interaction: ResponseInteraction = {
@@ -718,12 +718,12 @@ function markingQfd(
     kind: 'Canvas',
     items: [
       {
-        child: stimulusBlock(sr.id),
+        child: interactionBlock(ir.id),
         area: { x: 0, y: 0, width: 1, height: 1 },
         layer: 0,
       },
       {
-        child: interactionBlock(ir.id),
+        child: stimulusBlock(sr.id),
         area: { x: 0, y: 0, width: 1, height: 1 },
         layer: 1,
       },
@@ -879,26 +879,31 @@ export const q9Qd: QuestionDefinition = qd({
 function q9Canvas(includeAll: boolean, includeForeign: boolean): Canvas {
   const items = [
     {
-      child: stimulusBlock('sr-q9'),
+      child: interactionBlock('ir-q9'),
       area: { x: 0, y: 0, width: 1, height: 1 },
       layer: 0,
     },
     {
+      child: stimulusBlock('sr-q9'),
+      area: { x: 0, y: 0, width: 1, height: 1 },
+      layer: 1,
+    },
+    {
       child: responseElementBlock('Choice', 'triangle'),
       area: { x: 0.05, y: 0.2, width: 0.25, height: 0.5 },
-      layer: 1,
+      layer: 2,
     },
     {
       child: responseElementBlock('Choice', 'circle'),
       area: { x: 0.375, y: 0.2, width: 0.25, height: 0.5 },
-      layer: 1,
+      layer: 2,
     },
     ...(includeAll
       ? [
           {
             child: responseElementBlock('Choice', 'square'),
             area: { x: 0.7, y: 0.2, width: 0.25, height: 0.5 },
-            layer: 1,
+            layer: 2,
           },
         ]
       : []),
@@ -907,15 +912,10 @@ function q9Canvas(includeAll: boolean, includeForeign: boolean): Canvas {
           {
             child: responseElementBlock('Choice', 'he'),
             area: { x: 0.7, y: 0.2, width: 0.25, height: 0.5 },
-            layer: 1,
+            layer: 2,
           },
         ]
       : []),
-    {
-      child: interactionBlock('ir-q9'),
-      area: { x: 0, y: 0, width: 1, height: 1 },
-      layer: 2,
-    },
   ]
   return { kind: 'Canvas', items }
 }
@@ -962,23 +962,23 @@ export const q9QfdMissingChoicePlacement: QuestionFormDefinition = qfd({
     kind: 'Canvas',
     items: [
       {
-        child: stimulusBlock('sr-q9m18'),
+        child: interactionBlock('ir-q9m18'),
         area: { x: 0, y: 0, width: 1, height: 1 },
         layer: 0,
       },
       {
+        child: stimulusBlock('sr-q9m18'),
+        area: { x: 0, y: 0, width: 1, height: 1 },
+        layer: 1,
+      },
+      {
         child: responseElementBlock('Choice', 'triangle'),
         area: { x: 0.05, y: 0.2, width: 0.25, height: 0.5 },
-        layer: 1,
+        layer: 2,
       },
       {
         child: responseElementBlock('Choice', 'circle'),
         area: { x: 0.375, y: 0.2, width: 0.25, height: 0.5 },
-        layer: 1,
-      },
-      {
-        child: interactionBlock('ir-q9m18'),
-        area: { x: 0, y: 0, width: 1, height: 1 },
         layer: 2,
       },
     ],
@@ -1056,6 +1056,19 @@ const q10GapSpecs = [
   },
 ]
 
+/** Normalized (image-relative) drop-target regions for the four heart chambers
+ * in `materialized-heart-diagram.png`: atria across the top, ventricles below,
+ * left/right split by the heart's vertical midline. */
+const q10GapAreas: Record<
+  string,
+  { x: number; y: number; width: number; height: number }
+> = {
+  'gap-la': { x: 0.2, y: 0.42, width: 0.2, height: 0.06 }, // left atrium (top-left)
+  'gap-ra': { x: 0.6, y: 0.42, width: 0.2, height: 0.06 }, // right atrium (top-right)
+  'gap-lv': { x: 0.15, y: 0.73, width: 0.2, height: 0.06 }, // left ventricle (bottom-left)
+  'gap-rv': { x: 0.6, y: 0.73, width: 0.2, height: 0.06 }, // right ventricle (bottom-right)
+}
+
 const q10Interaction: ResponseInteraction = {
   id: 'q10-heart-complete',
   code: 'Q10_HEART_COMPLETE',
@@ -1119,22 +1132,22 @@ export const q10Qd: QuestionDefinition = qd({
 function q10Layout(concretePlacements: boolean): Canvas {
   const items = [
     {
-      child: stimulusBlock('sr-q10'),
+      child: interactionBlock('ir-q10'),
       area: { x: 0, y: 0, width: 1, height: 1 },
       layer: 0,
     },
+    {
+      child: stimulusBlock('sr-q10'),
+      area: { x: 0, y: 0, width: 1, height: 1 },
+      layer: 1,
+    },
     ...(concretePlacements
-      ? q10GapSpecs.map((g, i) => ({
+      ? q10GapSpecs.map((g) => ({
           child: responseElementBlock('CompletingGap', g.id),
-          area: { x: 0.1 + i * 0.2, y: 0.1, width: 0.15, height: 0.1 },
-          layer: 1,
+          area: q10GapAreas[g.id],
+          layer: 2,
         }))
       : []),
-    {
-      child: interactionBlock('ir-q10'),
-      area: { x: 0, y: 0, width: 1, height: 1 },
-      layer: 2,
-    },
   ]
   return { kind: 'Canvas', items }
 }
@@ -1210,12 +1223,12 @@ export const q10QfdMissingGapPlacements: QuestionFormDefinition = {
     kind: 'Canvas',
     items: [
       {
-        child: stimulusBlock('sr-q10m22'),
+        child: interactionBlock('ir-q10m22'),
         area: { x: 0, y: 0, width: 1, height: 1 },
         layer: 0,
       },
       {
-        child: interactionBlock('ir-q10m22'),
+        child: stimulusBlock('sr-q10m22'),
         area: { x: 0, y: 0, width: 1, height: 1 },
         layer: 1,
       },

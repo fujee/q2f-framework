@@ -16,7 +16,9 @@ export function placeableElements(
   }
   if (interaction.type === 'Completing') {
     return interaction.completingGaps
-      .filter((g) => g.stimulusRef === stimulusId)
+      .filter(
+        (g) => g.stimulusRef === stimulusId && g.anchor?.kind !== 'RegionAnchor'
+      )
       .map((g) => ({ kind: 'CompletingGap' as const, id: g.id }))
   }
   return []

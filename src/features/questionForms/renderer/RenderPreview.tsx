@@ -1,35 +1,92 @@
 import { useMemo, type ReactNode } from 'react'
-import type { QuestionDefinition } from '@/domain/qd/model'
+import { Lock } from 'lucide-react'
+import type { QuestionDefinition, ResponseInteraction } from '@/domain/qd/model'
 import type {
   CanvasItem,
   ContainerElement,
   ContentElement,
   Inline,
+  InteractionRealization,
   LayoutElement,
   QuestionFormDefinition,
+  ResponseElementBlock,
 } from '@/domain/qfd/model'
 import {
   buildRenderContext,
+  directMarkingForStimulus,
+  imageWorkspaceSrRefForResponse,
   interactionBlockRendersWidget,
+  isQdAnchoredGap,
   resolveRealizedStimulusContent,
   splitByMarkers,
   workspaceStimulus,
   type RenderContext,
 } from './renderContext'
-import { groupCanvasRows, rowGapPx, rowSpan } from './canvasLayout'
+import { CANVAS_BASE_HEIGHT_PX } from './canvasLayout'
 import {
+  CompletionBankWidget,
   EffectiveInstruction,
   InteractionWidget,
+  MarkingWidget,
   ResponseElementWidget,
   StimulusContent,
 } from './interactionWidgets'
 import { SelectionProvider } from './selectionContext'
+import { ContainedImage } from './ContainedImage'
+import { qdAnchoredGapsForStimulus } from '../lib/imageRegionGeometry'
+import { CompletionProvider } from './completionContext'
+import { RuntimeProgressProvider, useRuntimeProgress } from './runtimeProgress'
 
 function isContent(el: LayoutElement): el is ContentElement {
   return (
     el.kind === 'StimulusBlock' ||
     el.kind === 'InteractionBlock' ||
     el.kind === 'ResponseElementBlock'
+  )
+}
+
+function InteractionLockNote({
+  predecessor,
+}: {
+  predecessor?: ResponseInteraction
+}): ReactNode {
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+      <Lock className="size-3.5 shrink-0" />
+      <span>
+        Locked — answer{' '}
+        <span className="font-medium text-foreground/80">
+          {predecessor?.code ?? 'the previous interaction'}
+        </span>{' '}
+        correctly to unlock.
+      </span>
+    </div>
+  )
+}
+
+/** An InteractionBlock gated by QD Required dependencies: hidden/disabled until
+ * every RequiresCorrectness predecessor is answered correctly (and every
+ * RequiresCompletion predecessor is answered). */
+function GatedInteraction({
+  ctx,
+  interaction,
+  ir,
+}: {
+  ctx: RenderContext
+  interaction: ResponseInteraction
+  ir: InteractionRealization
+}): ReactNode {
+  const { isUnlocked, blockingPredecessor } = useRuntimeProgress()
+  if (!isUnlocked(interaction.id)) {
+    return (
+      <InteractionLockNote predecessor={blockingPredecessor(interaction.id)} />
+    )
+  }
+  return (
+    <div className="space-y-1.5">
+      <EffectiveInstruction interaction={interaction} ir={ir} />
+      <InteractionWidget ctx={ctx} interaction={interaction} ir={ir} />
+    </div>
   )
 }
 
@@ -55,12 +112,7 @@ function ContentRenderer({
       : undefined
     if (!ir || !interaction)
       return <div className="text-xs text-destructive">Missing interaction</div>
-    return (
-      <div className="space-y-1.5">
-        <EffectiveInstruction interaction={interaction} ir={ir} />
-        <InteractionWidget ctx={ctx} interaction={interaction} ir={ir} />
-      </div>
-    )
+    return <GatedInteraction ctx={ctx} interaction={interaction} ir={ir} />
   }
 
   return (
@@ -170,22 +222,128 @@ function InteractionWidgetOnly({
   return <InteractionWidget ctx={ctx} interaction={interaction} ir={ir} />
 }
 
-/** Renders a layout element inside a Canvas: InteractionBlocks render only
- * their widget (instruction is hoisted above the surface); everything else
- * renders normally. */
-function SpatialNodeRenderer({
+/** Renders a Workspace image with its interaction's response elements (choices,
+ * gaps) overlaid on the *visible image* rather than against the Canvas. Their
+ * QFD areas are image-relative (protocol §Q9/Q10), so letterboxing from a
+ * differently-proportioned Canvas must not detach them from the image. */
+function StimulusWithResponseOverlays({
+  ctx,
+  srRef,
+  responseItems,
+}: {
+  ctx: RenderContext
+  srRef: string
+  responseItems: CanvasItem[]
+}) {
+  const sr = ctx.stimulusRealizationById.get(srRef)
+  const stimulus = sr ? ctx.stimulusById.get(sr.stimulusRef) : undefined
+  const content =
+    stimulus && sr ? resolveRealizedStimulusContent(stimulus, sr) : undefined
+  if (!stimulus) {
+    return <div className="text-xs text-destructive">Missing stimulus</div>
+  }
+  if (!content) {
+    return <StimulusContent stimulus={stimulus} sr={sr} fill />
+  }
+
+  const kinds = new Map(
+    responseItems.map((item) => {
+      const child = item.child as ResponseElementBlock
+      return [child.elementRef, child.elementKind] as const
+    })
+  )
+
+  return (
+    <ContainedImage
+      src={content}
+      alt={stimulus.code}
+      regions={responseItems.map((item) => ({
+        key: (item.child as ResponseElementBlock).elementRef,
+        x: item.area.x,
+        y: item.area.y,
+        width: item.area.width,
+        height: item.area.height,
+      }))}
+      renderRegion={(region) => (
+        <ResponseElementWidget
+          ctx={ctx}
+          elementKind={kinds.get(region.key) ?? 'Choice'}
+          elementRef={region.key}
+          fill
+        />
+      )}
+    />
+  )
+}
+
+/** Renders a layout element inside a Canvas. InteractionBlocks render only
+ * their widget (instruction is hoisted above the surface); StimulusBlocks fill
+ * their assigned area so the preview matches the editor's placement. */
+function CanvasNodeRenderer({
   ctx,
   el,
 }: {
   ctx: RenderContext
   el: LayoutElement
 }): ReactNode {
+  const { isUnlocked } = useRuntimeProgress()
   if (el.kind === 'InteractionBlock') {
     return (
       <InteractionWidgetOnly ctx={ctx} irRef={el.interactionRealizationRef} />
     )
   }
-  return <NodeRenderer ctx={ctx} el={el} />
+  if (el.kind === 'StimulusBlock') {
+    const sr = ctx.stimulusRealizationById.get(el.stimulusRealizationRef)
+    const stimulus = sr ? ctx.stimulusById.get(sr.stimulusRef) : undefined
+    if (!stimulus) {
+      return <div className="text-xs text-destructive">Missing stimulus</div>
+    }
+    const content = resolveRealizedStimulusContent(stimulus, sr)
+    if (stimulus.type === 'Image' && content) {
+      const marking = directMarkingForStimulus(ctx, stimulus.id)
+      if (marking && isUnlocked(marking.interaction.id)) {
+        // The marking surface is the workspace image; render it once with the
+        // interactive marks overlaid, never as a duplicate StimulusBlock.
+        return <MarkingWidget ctx={ctx} interaction={marking.interaction} />
+      }
+      const anchoredGaps = qdAnchoredGapsForStimulus(ctx.qd, stimulus.id)
+      if (anchoredGaps.length > 0) {
+        return (
+          <ContainedImage
+            src={content}
+            alt={stimulus.code}
+            regions={anchoredGaps.map((g) => ({
+              key: g.gapId,
+              x: g.x,
+              y: g.y,
+              width: g.width,
+              height: g.height,
+            }))}
+            renderRegion={(region) => (
+              <ResponseElementWidget
+                ctx={ctx}
+                elementKind="CompletingGap"
+                elementRef={region.key}
+                fill
+              />
+            )}
+          />
+        )
+      }
+    }
+    return <StimulusContent stimulus={stimulus} sr={sr} fill />
+  }
+  if (el.kind === 'ResponseElementBlock') {
+    return (
+      <ResponseElementWidget
+        ctx={ctx}
+        elementKind={el.elementKind}
+        elementRef={el.elementRef}
+        fill
+      />
+    )
+  }
+  return <ContainerRenderer ctx={ctx} container={el} />
 }
 
 function ContainerRenderer({
@@ -195,6 +353,7 @@ function ContainerRenderer({
   ctx: RenderContext
   container: ContainerElement
 }): ReactNode {
+  const { isUnlocked, blockingPredecessor } = useRuntimeProgress()
   switch (container.kind) {
     case 'Stack':
       return (
@@ -236,6 +395,21 @@ function ContainerRenderer({
       // placed options never overlap the question text.
       const headers: ReactNode[] = []
       const spatialItems: CanvasItem[] = []
+      // Response elements whose owner integrates a Workspace image are overlaid
+      // on that image (image-relative coordinates), not placed against the Canvas.
+      const hostedResponseItems = new Map<string, CanvasItem[]>()
+
+      const imageStimulusRefs = new Set<string>()
+      for (const item of container.items) {
+        if (item.child.kind !== 'StimulusBlock') continue
+        const sr = ctx.stimulusRealizationById.get(
+          item.child.stimulusRealizationRef
+        )
+        const stimulus = sr ? ctx.stimulusById.get(sr.stimulusRef) : undefined
+        if (stimulus?.type === 'Image')
+          imageStimulusRefs.add(item.child.stimulusRealizationRef)
+      }
+
       for (const item of container.items) {
         if (item.child.kind === 'InteractionBlock') {
           const ref = item.child.interactionRealizationRef
@@ -243,25 +417,68 @@ function ContainerRenderer({
           const interaction = ir
             ? ctx.interactionById.get(ir.interactionRef)
             : undefined
+          const unlocked =
+            ir && interaction ? isUnlocked(interaction.id) : false
           if (ir && interaction) {
-            headers.push(
-              <EffectiveInstruction
-                key={ref}
-                interaction={interaction}
-                ir={ir}
-              />
-            )
+            if (unlocked) {
+              headers.push(
+                <EffectiveInstruction
+                  key={ref}
+                  interaction={interaction}
+                  ir={ir}
+                />
+              )
+              if (
+                interaction.type === 'Completing' &&
+                !interactionBlockRendersWidget(ctx, ref)
+              ) {
+                headers.push(
+                  <CompletionBankWidget
+                    key={`${ref}-bank`}
+                    interaction={interaction}
+                  />
+                )
+              }
+            } else {
+              headers.push(
+                <InteractionLockNote
+                  key={`${ref}-lock`}
+                  predecessor={blockingPredecessor(interaction.id)}
+                />
+              )
+            }
           }
-          if (interactionBlockRendersWidget(ctx, ref)) {
+          if (interactionBlockRendersWidget(ctx, ref) && unlocked) {
             spatialItems.push(item)
           }
           continue
         }
+        if (
+          item.child.kind === 'ResponseElementBlock' &&
+          item.child.elementKind === 'CompletingGap' &&
+          isQdAnchoredGap(ctx, item.child.elementRef)
+        ) {
+          // QD-anchored gaps are rendered inside the stimulus content below,
+          // never by a (stale) QFD placement.
+          continue
+        }
+        if (item.child.kind === 'ResponseElementBlock') {
+          const hostSr = imageWorkspaceSrRefForResponse(
+            ctx,
+            item.child.elementKind,
+            item.child.elementRef
+          )
+          if (hostSr && imageStimulusRefs.has(hostSr)) {
+            const list = hostedResponseItems.get(hostSr) ?? []
+            list.push(item)
+            hostedResponseItems.set(hostSr, list)
+            continue
+          }
+        }
         spatialItems.push(item)
       }
 
-      const rows = groupCanvasRows(spatialItems)
-      if (rows.length === 0) {
+      if (spatialItems.length === 0) {
         return (
           <div className="space-y-2">
             {headers.length > 0 && <div className="space-y-1">{headers}</div>}
@@ -274,56 +491,37 @@ function ContainerRenderer({
       return (
         <div className="space-y-2">
           {headers.length > 0 && <div className="space-y-1">{headers}</div>}
-          <div className="rounded-md border border-dashed border-border bg-muted/10 p-2">
-            {rows.map((row, ri) => {
-              const span = rowSpan(row)
+          <div
+            className="relative w-full overflow-hidden rounded-md border border-dashed border-border bg-muted/10"
+            style={{ height: CANVAS_BASE_HEIGHT_PX }}
+          >
+            {spatialItems.map((item, i) => {
+              const child = item.child
+              const isStimulus = child.kind === 'StimulusBlock'
+              const hosted = isStimulus
+                ? hostedResponseItems.get(child.stimulusRealizationRef)
+                : undefined
               return (
                 <div
-                  key={ri}
-                  className="relative"
+                  key={i}
+                  className="absolute overflow-hidden"
                   style={{
-                    marginTop:
-                      ri === 0 ? 0 : rowGapPx(rows[ri - 1].bottom, row.top),
+                    left: `${item.area.x * 100}%`,
+                    top: `${item.area.y * 100}%`,
+                    width: `${item.area.width * 100}%`,
+                    height: `${item.area.height * 100}%`,
+                    zIndex: item.layer,
                   }}
                 >
-                  {/* Base establishes the row's actual height and horizontal offset. */}
-                  <div
-                    className="relative"
-                    style={{
-                      marginLeft: `${row.base.area.x * 100}%`,
-                      width: `${row.base.area.width * 100}%`,
-                    }}
-                  >
-                    <SpatialNodeRenderer ctx={ctx} el={row.base.child} />
-                    {row.overlay.map((o, j) => (
-                      <div
-                        key={`overlay-${j}`}
-                        className="absolute"
-                        style={{
-                          left: `${o.style.leftPct}%`,
-                          top: `${o.style.topPct}%`,
-                          width: `${o.style.widthPct}%`,
-                          height: `${o.style.heightPct}%`,
-                        }}
-                      >
-                        <SpatialNodeRenderer ctx={ctx} el={o.item.child} />
-                      </div>
-                    ))}
-                  </div>
-                  {/* Side items keep their horizontal position within the row. */}
-                  {row.side.map((item, j) => (
-                    <div
-                      key={`side-${j}`}
-                      className="absolute"
-                      style={{
-                        left: `${item.area.x * 100}%`,
-                        top: `${((item.area.y - row.top) / span) * 100}%`,
-                        width: `${item.area.width * 100}%`,
-                      }}
-                    >
-                      <SpatialNodeRenderer ctx={ctx} el={item.child} />
-                    </div>
-                  ))}
+                  {isStimulus && hosted && hosted.length > 0 ? (
+                    <StimulusWithResponseOverlays
+                      ctx={ctx}
+                      srRef={child.stimulusRealizationRef}
+                      responseItems={hosted}
+                    />
+                  ) : (
+                    <CanvasNodeRenderer ctx={ctx} el={child} />
+                  )}
                 </div>
               )
             })}
@@ -360,10 +558,14 @@ export function QfdPreview({
 }) {
   const ctx = useMemo(() => buildRenderContext(qd, qfd), [qd, qfd])
   return (
-    <SelectionProvider>
-      <div className="space-y-3 rounded-lg border border-border bg-background p-4">
-        <ContainerRenderer ctx={ctx} container={qfd.rootLayout} />
-      </div>
-    </SelectionProvider>
+    <RuntimeProgressProvider qd={qd}>
+      <SelectionProvider>
+        <CompletionProvider>
+          <div className="space-y-3 rounded-lg border border-border bg-background p-4">
+            <ContainerRenderer ctx={ctx} container={qfd.rootLayout} />
+          </div>
+        </CompletionProvider>
+      </SelectionProvider>
+    </RuntimeProgressProvider>
   )
 }
