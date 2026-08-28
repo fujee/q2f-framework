@@ -15,6 +15,7 @@ export const qfdTestProfile: QuestionFormProfile = {
   capabilities: [
     'TextualPresentation',
     'ExpandedSelection',
+    'CollapsedSelection',
     'DirectWorkspaceSelection',
     'ReferencedWorkspaceSelection',
     'DirectOrdering',
