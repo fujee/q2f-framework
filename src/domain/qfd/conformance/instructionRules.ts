@@ -1,57 +1,87 @@
+import type { QuestionDefinition } from '../../qd/model'
+import { fail, pass, reviewRequired, type Finding } from '../../shared/findings'
 import type { QuestionFormDefinition } from '../model'
-import { type Finding, pass, reviewRequired } from '../../shared/findings'
+import type { ConformanceEvidence } from './evidence'
 
-/** CONF-INS-001..003. `trustedInstructionRealizationIds` models "explicitly configured,
- * testable trusted deterministic template" support (rules catalog Section 8 / QFD plan
- * Section 3): only realizations whose id is explicitly listed skip the review requirement. */
 export function validateInstructionConformance(
+  qd: QuestionDefinition,
   qfd: QuestionFormDefinition,
-  trustedInstructionRealizationIds: ReadonlySet<string> = new Set()
+  evidence: ConformanceEvidence
 ): Finding[] {
   const findings: Finding[] = []
-
-  for (const ir of qfd.interactionRealizations) {
-    if (ir.realizedInstruction === undefined) {
-      // CONF-INS-001: direct use of the QD instruction is conformant
-      findings.push(
-        pass(
-          'CONF-INS-001',
-          `InteractionRealization '${ir.id}' uses the QD instruction directly.`,
-          { affectedIds: [ir.id] }
-        )
+  for (const interaction of qd.responseInteractions) {
+    const realization = qfd.interactionRealizations.find(
+      ({ interactionRef }) => interactionRef === interaction.id
+    )
+    if (!realization) continue
+    const tasks = realization.instructionRealizations.filter(
+      ({ role }) => role === 'TaskInstruction'
+    )
+    const presenceValid = interaction.instruction
+      ? tasks.length === 1
+      : tasks.length === 0
+    findings.push(
+      presenceValid
+        ? pass(
+            'CONF-INS-001',
+            `TaskInstruction presence for '${interaction.id}' matches the QD.`
+          )
+        : fail(
+            'CONF-INS-001',
+            `TaskInstruction presence for '${interaction.id}' contradicts the QD.`
+          )
+    )
+    if (interaction.instruction && tasks.length === 1) {
+      const task = tasks[0]
+      if (
+        task.realizedText === undefined ||
+        task.realizedText === interaction.instruction ||
+        evidence.trustedTaskInstructionIds?.has(task.id)
       )
-    } else if (trustedInstructionRealizationIds.has(ir.id)) {
-      findings.push(
-        pass(
-          'CONF-INS-002',
-          `Free realizedInstruction for '${ir.id}' is produced by a configured trusted deterministic template.`,
-          {
-            affectedIds: [ir.id],
-          }
+        findings.push(
+          pass(
+            'CONF-INS-002',
+            `TaskInstruction '${task.id}' deterministically preserves the QD instruction.`,
+            { affectedIds: [task.id] }
+          )
         )
-      )
-    } else {
-      // CONF-INS-002: free reformulation normally requires review
-      findings.push(
-        reviewRequired(
-          'CONF-INS-002',
-          `Free realizedInstruction for '${ir.id}' requires review for semantic equivalence to the QD instruction.`,
-          {
-            affectedIds: [ir.id],
-          }
+      else if (task.realizedText.trim().length === 0)
+        findings.push(
+          fail(
+            'CONF-INS-002',
+            `TaskInstruction '${task.id}' erases the QD task.`,
+            {
+              affectedIds: [task.id],
+            }
+          )
         )
-      )
+      else
+        findings.push(
+          reviewRequired(
+            'CONF-INS-002',
+            `Reformulated TaskInstruction '${task.id}' requires semantic review.`,
+            { affectedIds: [task.id] }
+          )
+        )
     }
 
-    // CONF-INS-003: effective instruction remains available (QD instruction or realizedInstruction)
-    findings.push(
-      pass(
-        'CONF-INS-003',
-        `An effective instruction remains available for '${ir.id}'.`,
-        { affectedIds: [ir.id] }
+    for (const guidance of realization.instructionRealizations.filter(
+      ({ role }) => role === 'OperationalGuidance'
+    )) {
+      findings.push(
+        evidence.trustedOperationalGuidanceIds?.has(guidance.id)
+          ? pass(
+              'CONF-INS-003',
+              `OperationalGuidance '${guidance.id}' has trusted non-semantic evidence.`,
+              { affectedIds: [guidance.id] }
+            )
+          : reviewRequired(
+              'CONF-INS-003',
+              `OperationalGuidance '${guidance.id}' requires review for added obligations.`,
+              { affectedIds: [guidance.id] }
+            )
       )
-    )
+    }
   }
-
   return findings
 }

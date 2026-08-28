@@ -1,326 +1,287 @@
-import type { QuestionDefinition, ResponseInteraction } from '../../qd/model'
-import type { QuestionFormDefinition } from '../model'
-import { MECHANISM_DESCRIPTORS } from '../mechanisms/registry'
-import { findParentContainer, flattenLayout } from '../layout'
-import { type Finding, fail, pass } from '../../shared/findings'
+import type {
+  ItemOrderPolicy,
+  QuestionDefinition,
+  RelatingSet,
+  ResponseInteraction,
+} from '../../qd/model'
+import { fail, pass, reviewRequired, type Finding } from '../../shared/findings'
+import type {
+  ElementPresentation,
+  InteractionRealization,
+  LayoutElement,
+  QuestionFormDefinition,
+} from '../model'
+import type { ConformanceEvidence } from './evidence'
 
-/** CONF-INT-001..002, CONF-MECH-001..002, CONF-PRES-001..004, CONF-ORD-001. */
 export function validateInteractionConformance(
   qd: QuestionDefinition,
-  qfd: QuestionFormDefinition
+  qfd: QuestionFormDefinition,
+  evidence: ConformanceEvidence
 ): Finding[] {
   const findings: Finding[] = []
-  const blocks = flattenLayout(qfd.rootLayout)
-  const interactionBlockCounts = new Map<string, number>()
-  for (const block of blocks) {
-    if (block.kind === 'InteractionBlock') {
-      interactionBlockCounts.set(
-        block.interactionRealizationRef,
-        (interactionBlockCounts.get(block.interactionRealizationRef) ?? 0) + 1
-      )
-    }
-  }
-
-  // CONF-INT-001: every QD interaction has exactly one InteractionRealization
   for (const interaction of qd.responseInteractions) {
-    const count = qfd.interactionRealizations.filter(
-      (ir) => ir.interactionRef === interaction.id
-    ).length
-    findings.push(
-      count === 1
-        ? pass(
-            'CONF-INT-001',
-            `Interaction '${interaction.code}' has exactly one InteractionRealization.`,
-            { affectedIds: [interaction.id] }
-          )
-        : fail(
-            'CONF-INT-001',
-            `Interaction '${interaction.code}' has ${count} InteractionRealizations; expected exactly one.`,
-            {
-              affectedIds: [interaction.id],
-            }
-          )
+    const realizations = qfd.interactionRealizations.filter(
+      ({ interactionRef }) => interactionRef === interaction.id
     )
-  }
-
-  // CONF-INT-002: QFD does not realize interactions outside the referenced QD
-  const foreign = qfd.interactionRealizations.filter(
-    (ir) => !qd.responseInteractions.some((i) => i.id === ir.interactionRef)
-  )
-  findings.push(
-    foreign.length === 0
-      ? pass(
-          'CONF-INT-002',
-          'QFD does not realize any interaction outside the referenced QD.'
-        )
-      : fail(
-          'CONF-INT-002',
-          `QFD realizes ${foreign.length} interaction(s) not present in the referenced QD.`,
-          {
-            affectedIds: foreign.map((ir) => ir.id),
-          }
-        )
-  )
-
-  for (const ir of qfd.interactionRealizations) {
-    const interaction = qd.responseInteractions.find(
-      (i) => i.id === ir.interactionRef
-    )
-    if (!interaction) continue
-    const descriptor = MECHANISM_DESCRIPTORS[ir.mechanism]
-
-    // CONF-MECH-001: mechanism compatible with the QD interaction type
-    const compatible = descriptor.compatibleInteractionTypes.has(
-      interaction.type
-    )
-    findings.push(
-      compatible
-        ? pass(
-            'CONF-MECH-001',
-            `Mechanism '${ir.mechanism}' is compatible with interaction type '${interaction.type}'.`,
-            {
-              affectedIds: [ir.id],
-            }
-          )
-        : fail(
-            'CONF-MECH-001',
-            `Mechanism '${ir.mechanism}' is not compatible with interaction type '${interaction.type}'.`,
-            {
-              affectedIds: [ir.id],
-            }
-          )
-    )
-
-    // CONF-MECH-002: unambiguous canonical-response interpretation — guaranteed by
-    // the 1:1 mechanism->canonicalResponseKind descriptor mapping whenever MECH-001 holds.
-    findings.push(
-      compatible
-        ? pass(
-            'CONF-MECH-002',
-            `Mechanism '${ir.mechanism}' has an unambiguous canonical response (${descriptor.canonicalResponseKind}).`,
-            {
-              affectedIds: [ir.id],
-            }
-          )
-        : fail(
-            'CONF-MECH-002',
-            `Mechanism '${ir.mechanism}' has no unambiguous canonical response for interaction '${interaction.code}'.`,
-            {
-              affectedIds: [ir.id],
-            }
-          )
-    )
-
-    // CONF-PRES-001: layout satisfies the selected mechanism descriptor's layout requirements
-    const interactionBlock = blocks.find(
-      (b) =>
-        b.kind === 'InteractionBlock' && b.interactionRealizationRef === ir.id
-    )
-    if (interactionBlock) {
-      const container = findParentContainer(qfd.rootLayout, interactionBlock)
-      const containerOk = Boolean(
-        container && descriptor.requiredLayoutCapabilities.has(container.kind)
-      )
+    const realization = realizations[0]
+    if (
+      realizations.length !== 1 ||
+      !realization ||
+      !typeCompatible(interaction, realization)
+    ) {
       findings.push(
-        containerOk
-          ? pass(
-              'CONF-PRES-001',
-              `Layout hosting '${ir.id}' satisfies mechanism '${ir.mechanism}' requirements.`,
-              { affectedIds: [ir.id] }
-            )
-          : fail(
-              'CONF-PRES-001',
-              `Layout hosting '${ir.id}' does not satisfy mechanism '${ir.mechanism}' requirements.`,
-              {
-                affectedIds: [ir.id],
-              }
-            )
+        fail(
+          'CONF-INT-001',
+          `Interaction '${interaction.id}' lacks a type-compatible realization.`
+        )
       )
+      continue
     }
-
-    // CONF-PRES-003 / CONF-PRES-004: exactly one InteractionBlock per InteractionRealization
-    const blockCount = interactionBlockCounts.get(ir.id) ?? 0
     findings.push(
-      blockCount === 1
-        ? pass(
-            'CONF-PRES-003',
-            `Interaction '${interaction.code}' has exactly one logical active response presentation.`,
-            {
-              affectedIds: [ir.id],
-            }
-          )
-        : fail(
-            'CONF-PRES-003',
-            `Interaction '${interaction.code}' has ${blockCount} InteractionBlocks; expected exactly one.`,
-            {
-              affectedIds: [ir.id],
-            }
-          )
-    )
-    findings.push(
-      blockCount === 1
-        ? pass(
-            'CONF-PRES-004',
-            `'${interaction.code}' has exactly one InteractionBlock for its InteractionRealization.`,
-            {
-              affectedIds: [ir.id],
-            }
-          )
-        : fail(
-            'CONF-PRES-004',
-            `'${interaction.code}' does not have exactly one InteractionBlock for its InteractionRealization.`,
-            {
-              affectedIds: [ir.id],
-            }
-          )
-    )
-  }
-
-  // CONF-PRES-002: every QD interaction is presented to the respondent
-  for (const interaction of qd.responseInteractions) {
-    const ir = qfd.interactionRealizations.find(
-      (r) => r.interactionRef === interaction.id
-    )
-    const presented =
-      Boolean(ir) &&
-      blocks.some(
-        (b) =>
-          b.kind === 'InteractionBlock' &&
-          b.interactionRealizationRef === ir!.id
+      pass(
+        'CONF-INT-001',
+        `Interaction '${interaction.id}' retains its canonical response type.`
       )
-    findings.push(
-      presented
-        ? pass(
-            'CONF-PRES-002',
-            `Interaction '${interaction.code}' is presented to the respondent.`,
-            { affectedIds: [interaction.id] }
-          )
-        : fail(
-            'CONF-PRES-002',
-            `Interaction '${interaction.code}' is not presented anywhere in the layout.`,
-            { affectedIds: [interaction.id] }
-          )
     )
+    switch (realization.type) {
+      case 'SelectingRealization':
+        if (interaction.type === 'Selecting')
+          findings.push(
+            orderFinding(
+              'CONF-SEL-ORD-001',
+              interaction.standaloneChoiceOrderPolicy,
+              interaction.choices
+                .filter(({ workspaceStimulusRef }) => !workspaceStimulusRef)
+                .map(({ id }) => id),
+              realization.standaloneSelection
+                ? presentationOrder(
+                    realization.standaloneSelection.localLayout,
+                    realization.standaloneSelection.optionPresentations,
+                    'Choice',
+                    interaction.id
+                  )
+                : [],
+              interaction.id
+            )
+          )
+        break
+      case 'OrderingRealization':
+        if (interaction.type === 'Ordering')
+          findings.push(
+            orderFinding(
+              'CONF-ORD-001',
+              interaction.itemOrderPolicy,
+              interaction.orderingItems.map(({ id }) => id),
+              presentationOrder(
+                realization.presentation.localLayout,
+                realization.presentation.itemPresentations,
+                'OrderingItem',
+                interaction.id
+              ),
+              interaction.id
+            )
+          )
+        break
+      case 'RelatingRealization':
+        if (interaction.type === 'Relating') {
+          findings.push(
+            relatingOrderFinding(
+              interaction.sourceSet,
+              realization.sourceSetPresentation.localLayout,
+              realization.sourceSetPresentation.elementPresentations,
+              'Source',
+              interaction.id
+            ),
+            relatingOrderFinding(
+              interaction.targetSet,
+              realization.targetSetPresentation.localLayout,
+              realization.targetSetPresentation.elementPresentations,
+              'Target',
+              interaction.id
+            )
+          )
+          if (realization.mode === 'RelationNotation')
+            findings.push(
+              evidence.trustedRelationNotationInteractionRefs?.has(
+                interaction.id
+              )
+                ? pass(
+                    'CONF-REL-NOT-001',
+                    `RelationNotation for '${interaction.id}' has trusted canonical mapping evidence.`
+                  )
+                : reviewRequired(
+                    'CONF-REL-NOT-001',
+                    `RelationNotation for '${interaction.id}' requires canonical mapping review.`
+                  )
+            )
+        }
+        break
+      case 'CompletingRealization':
+        if (interaction.type === 'Completing') {
+          findings.push(
+            identityFinding(
+              'CONF-CMP-GAP-001',
+              interaction.completingGaps.map(({ id }) => id),
+              realization.gapRealizations.map(({ gapRef }) => gapRef),
+              interaction.id,
+              'Gap'
+            )
+          )
+          const presentedItems = [
+            ...(realization.itemSource?.itemPresentations ?? []),
+            ...realization.gapRealizations.flatMap((gap) =>
+              gap.type === 'ItemGapRealization' && gap.selectionPresentation
+                ? gap.selectionPresentation.optionPresentations
+                : []
+            ),
+          ].flatMap(({ elementRef }) =>
+            elementRef.kind === 'CompletingItem' &&
+            elementRef.interactionRef === interaction.id
+              ? [elementRef.completingItemRef]
+              : []
+          )
+          findings.push(
+            identityFinding(
+              'CONF-CMP-ITEM-001',
+              interaction.completingItems.map(({ id }) => id),
+              [...new Set(presentedItems)],
+              interaction.id,
+              'CompletingItem'
+            )
+          )
+        }
+        break
+      case 'ArtifactSubmissionRealization':
+        if (interaction.type === 'ArtifactSubmission')
+          findings.push(
+            evidence.trustedArtifactInteractionRefs?.has(interaction.id)
+              ? pass(
+                  'CONF-ART-001',
+                  `Artifact channel for '${interaction.id}' has trusted compatibility evidence.`
+                )
+              : reviewRequired(
+                  'CONF-ART-001',
+                  `Artifact channel compatibility for '${interaction.id}' requires review.`
+                )
+          )
+        break
+      default:
+        break
+    }
   }
-
-  findings.push(...validateOrderPreservation(qd, blocks))
-
+  for (const realization of qfd.interactionRealizations)
+    if (
+      !qd.responseInteractions.some(
+        ({ id }) => id === realization.interactionRef
+      )
+    )
+      findings.push(
+        fail(
+          'CONF-INT-EXTRA-001',
+          `InteractionRealization '${realization.interactionRef}' has no QD semantic basis.`
+        )
+      )
   return findings
 }
 
-/** CONF-ORD-001: Fixed item/element order preserved; Permutable may reorder but not identity/set.
- * Only checked where the QD items are individually placed via ResponseElementBlock; otherwise the
- * mechanism presents QD's own array order directly and there is nothing for QFD to violate. */
-function validateOrderPreservation(
-  qd: QuestionDefinition,
-  blocks: ReturnType<typeof flattenLayout>
-): Finding[] {
-  const findings: Finding[] = []
-
-  for (const interaction of qd.responseInteractions) {
-    const canonicalOrders = collectCanonicalOrders(interaction)
-    for (const { kind, policy, canonicalIds, ownerLabel } of canonicalOrders) {
-      const placedIds = blocks
-        .filter(
-          (b) =>
-            b.kind === 'ResponseElementBlock' &&
-            b.elementKind === kind &&
-            canonicalIds.includes(b.elementRef)
-        )
-        .map((b) => (b as { elementRef: string }).elementRef)
-      if (placedIds.length === 0) continue // not individually placed; QD order used directly, nothing to violate
-
-      if (policy === 'Fixed') {
-        const relevantCanonical = canonicalIds.filter((id) =>
-          placedIds.includes(id)
-        )
-        const preserved = relevantCanonical.every(
-          (id, i) => id === placedIds[i]
-        )
-        findings.push(
-          preserved
-            ? pass(
-                'CONF-ORD-001',
-                `Fixed order of ${ownerLabel} is preserved in the QFD layout.`,
-                { affectedIds: [interaction.id] }
-              )
-            : fail(
-                'CONF-ORD-001',
-                `Fixed order of ${ownerLabel} is not preserved in the QFD layout.`,
-                { affectedIds: [interaction.id] }
-              )
-        )
-      } else {
-        const sameSet =
-          placedIds.length === canonicalIds.length &&
-          canonicalIds.every((id) => placedIds.includes(id))
-        findings.push(
-          sameSet
-            ? pass(
-                'CONF-ORD-001',
-                `Permutable ${ownerLabel} preserve element identity/set in the QFD layout.`,
-                { affectedIds: [interaction.id] }
-              )
-            : fail(
-                'CONF-ORD-001',
-                `Permutable ${ownerLabel} do not preserve the full element set in the QFD layout.`,
-                {
-                  affectedIds: [interaction.id],
-                }
-              )
-        )
-      }
-    }
-  }
-
-  return findings
+function typeCompatible(
+  interaction: ResponseInteraction,
+  realization: InteractionRealization
+): boolean {
+  return realization.type === `${interaction.type}Realization`
 }
 
-interface CanonicalOrderGroup {
-  kind: 'Choice' | 'OrderingItem' | 'RelatingElement'
-  policy: 'Fixed' | 'Permutable'
-  canonicalIds: string[]
-  ownerLabel: string
+function orderFinding(
+  ruleId: string,
+  policy: ItemOrderPolicy | undefined,
+  expected: string[],
+  actual: string[],
+  interactionId: string
+): Finding {
+  const completePermutation = sameSet(expected, actual)
+  const valid =
+    completePermutation &&
+    (policy !== 'Fixed' || JSON.stringify(expected) === JSON.stringify(actual))
+  return valid
+    ? pass(
+        ruleId,
+        `Presentation order for '${interactionId}' preserves QD policy.`
+      )
+    : fail(
+        ruleId,
+        `Presentation order for '${interactionId}' violates QD policy.`
+      )
 }
 
-function collectCanonicalOrders(
-  interaction: ResponseInteraction
-): CanonicalOrderGroup[] {
-  if (interaction.type === 'Selecting') {
-    return [
-      {
-        kind: 'Choice',
-        policy: interaction.itemOrderPolicy,
-        canonicalIds: interaction.choices.map((c) => c.id),
-        ownerLabel: `choices of '${interaction.code}'`,
-      },
-    ]
-  }
-  if (interaction.type === 'Ordering') {
-    return [
-      {
-        kind: 'OrderingItem',
-        policy: interaction.itemOrderPolicy,
-        canonicalIds: interaction.orderingItems.map((i) => i.id),
-        ownerLabel: `items of '${interaction.code}'`,
-      },
-    ]
-  }
-  if (interaction.type === 'Relating') {
-    return [
-      {
-        kind: 'RelatingElement',
-        policy: interaction.sourceSet.elementOrderPolicy,
-        canonicalIds: interaction.sourceSet.relatingElements.map((e) => e.id),
-        ownerLabel: `source elements of '${interaction.code}'`,
-      },
-      {
-        kind: 'RelatingElement',
-        policy: interaction.targetSet.elementOrderPolicy,
-        canonicalIds: interaction.targetSet.relatingElements.map((e) => e.id),
-        ownerLabel: `target elements of '${interaction.code}'`,
-      },
-    ]
-  }
-  return []
+function identityFinding(
+  ruleId: string,
+  expected: string[],
+  actual: string[],
+  interactionId: string,
+  semanticKind: string
+): Finding {
+  return sameSet(expected, actual)
+    ? pass(
+        ruleId,
+        `${semanticKind} identities for '${interactionId}' are preserved.`
+      )
+    : fail(
+        ruleId,
+        `${semanticKind} identities for '${interactionId}' are incomplete or foreign.`
+      )
+}
+
+function relatingOrderFinding(
+  set: RelatingSet,
+  layout: LayoutElement,
+  presentations: ElementPresentation[],
+  side: 'Source' | 'Target',
+  interactionId: string
+): Finding {
+  return orderFinding(
+    'CONF-REL-ORD-001',
+    set.elementOrderPolicy,
+    set.relatingElements.map(({ id }) => id),
+    presentationOrder(
+      layout,
+      presentations,
+      'RelatingElement',
+      interactionId,
+      side
+    ),
+    interactionId
+  )
+}
+
+function presentationOrder(
+  layout: LayoutElement,
+  presentations: ElementPresentation[],
+  kind: 'Choice' | 'OrderingItem' | 'RelatingElement',
+  interactionId: string,
+  side?: 'Source' | 'Target'
+): string[] {
+  const byId = new Map(
+    presentations.map((presentation) => [presentation.id, presentation])
+  )
+  return placementIds(layout).flatMap((id) => {
+    const ref = byId.get(id)?.elementRef
+    if (!ref || ref.kind !== kind || ref.interactionRef !== interactionId)
+      return []
+    if (ref.kind === 'Choice') return [ref.choiceRef]
+    if (ref.kind === 'OrderingItem') return [ref.orderingItemRef]
+    return ref.set === side ? [ref.relatingElementRef] : []
+  })
+}
+
+function placementIds(layout: LayoutElement): string[] {
+  if (layout.kind === 'LayoutPlacement') return [layout.realizationRef.id]
+  return layout.children.flatMap(placementIds)
+}
+
+function sameSet(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    new Set(left).size === left.length &&
+    left.every((value) => right.includes(value))
+  )
 }
