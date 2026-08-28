@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { QuestionDefinition } from '../model'
+import { referenceContentCarrier } from '../implementation/contentCarrier'
 import {
   cloneQuestionDefinition,
   validAllInteractions,
@@ -14,6 +15,33 @@ function expectFailure(qd: QuestionDefinition, ruleId: string): void {
       expect.objectContaining({ ruleId, status: 'FAIL' }),
     ])
   )
+}
+
+function useRegionAnchorForCompleting(qd: QuestionDefinition): void {
+  const completing = qd.responseInteractions.find(
+    ({ type }) => type === 'Completing'
+  )
+  if (!completing || completing.type !== 'Completing')
+    throw new Error('fixture drift')
+  completing.completingGaps[0].workspaceStimulusRef = 'stimulus-image'
+  completing.completingGaps[0].sourceAnchor = {
+    kind: 'RegionAnchor',
+    x: 10,
+    y: 20,
+    width: 300,
+    height: 150,
+  }
+  const textAssociation = qd.associations.find(
+    ({ interactionRef, stimulusRef }) =>
+      interactionRef === 'completing' && stimulusRef === 'stimulus-text'
+  )
+  if (!textAssociation) throw new Error('fixture drift')
+  textAssociation.role = 'Context'
+  qd.associations.push({
+    interactionRef: 'completing',
+    stimulusRef: 'stimulus-image',
+    role: 'Workspace',
+  })
 }
 
 describe('stabilized QD validation', () => {
@@ -84,6 +112,51 @@ describe('stabilized QD validation', () => {
     })
     expectFailure(qd, 'REL-003')
     expectFailure(qd, 'REL-004')
+  })
+
+  it('allows the same RelatingElement id once in each set', () => {
+    const qd = cloneQuestionDefinition()
+    const relating = qd.responseInteractions[2]
+    if (relating.type !== 'Relating') throw new Error('fixture drift')
+    relating.targetSet.relatingElements[0].id = 'source-fr'
+    relating.correctRelations[0].targetElementRef = 'source-fr'
+    expect(validateQD(qd).aggregate).toBe('PASS')
+  })
+
+  it('accepts a TextAnchor supported by its concrete Content carrier', () => {
+    expect(validateQD(cloneQuestionDefinition()).aggregate).toBe('PASS')
+  })
+
+  it('accepts a RegionAnchor supported by its concrete Content carrier', () => {
+    const qd = cloneQuestionDefinition()
+    useRegionAnchorForCompleting(qd)
+    expect(validateQD(qd).aggregate).toBe('PASS')
+  })
+
+  it('rejects a TextAnchor on a source without textual structure support', () => {
+    const qd = cloneQuestionDefinition()
+    const stimulus = qd.stimuli.find(({ id }) => id === 'stimulus-text')!
+    stimulus.sourceContent = referenceContentCarrier('spatial source', {
+      region: true,
+    })
+    expectFailure(qd, 'ASC-006')
+  })
+
+  it('rejects a RegionAnchor on a source without spatial structure support', () => {
+    const qd = cloneQuestionDefinition()
+    useRegionAnchorForCompleting(qd)
+    const stimulus = qd.stimuli.find(({ id }) => id === 'stimulus-image')!
+    stimulus.sourceContent = referenceContentCarrier('textual source', {
+      text: true,
+    })
+    expectFailure(qd, 'ASC-006')
+  })
+
+  it('rejects a sourceAnchor when sourceContent is absent', () => {
+    const qd = cloneQuestionDefinition()
+    const stimulus = qd.stimuli.find(({ id }) => id === 'stimulus-text')!
+    delete stimulus.sourceContent
+    expectFailure(qd, 'ASC-006')
   })
 
   it('rejects a Completing gap without its declared Workspace association', () => {

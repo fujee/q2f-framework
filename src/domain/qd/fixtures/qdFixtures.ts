@@ -1,4 +1,5 @@
 import type { QuestionDefinition } from '../model'
+import { referenceContentCarrier } from '../implementation/contentCarrier'
 
 export const validAllInteractions: QuestionDefinition = {
   id: 'qd-all-interactions',
@@ -92,13 +93,17 @@ export const validAllInteractions: QuestionDefinition = {
   stimuli: [
     {
       id: 'stimulus-text',
-      sourceContent: 'The capital is [city].',
+      sourceContent: referenceContentCarrier('The capital is [city].', {
+        text: true,
+      }),
       allowedModalities: ['Text'],
       materializationPolicy: 'Fixed',
     },
     {
       id: 'stimulus-image',
-      sourceContent: '/assets/map.png',
+      sourceContent: referenceContentCarrier('/assets/map.png', {
+        region: true,
+      }),
       allowedModalities: ['Image'],
       materializationPolicy: 'Fixed',
     },

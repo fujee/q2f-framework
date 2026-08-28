@@ -1,3 +1,5 @@
+import type { ReferenceContentCarrier } from './implementation/contentCarrier'
+
 /** Scientific Question Definition model from q2f-docs@ad6cccc.
  * Authoring/persistence metadata deliberately lives outside this module.
  */
@@ -10,8 +12,11 @@ export type RelatingElementRef = Id
 export type CompletingGapRef = Id
 export type CompletingItemRef = Id
 
-/** Pragmatic technical carrier for scientifically abstract Content. */
-export type Content = string
+/**
+ * Scientifically abstract Content, represented by either a plain carrier or
+ * reference-implementation metadata that can verify SourceAnchor support.
+ */
+export type Content = string | ReferenceContentCarrier
 export type TypedValue = string | number
 
 export interface QuestionDefinition {

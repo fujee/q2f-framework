@@ -1,4 +1,5 @@
 import type { QuestionDefinition, SourceAnchor, Stimulus } from '../../model'
+import { supportsSourceAnchor } from '../../implementation/contentCarrier'
 import type { QdIndex } from '../context'
 import { type Finding, fail, pass } from '../types'
 
@@ -168,7 +169,11 @@ function workspacePlacementValid(
   sourceAnchor?: SourceAnchor
 ): boolean {
   const hasPlacement = Boolean(placementSpecification?.trim())
-  if (sourceAnchor && stimulus.sourceContent === undefined) return false
+  if (
+    sourceAnchor &&
+    !supportsSourceAnchor(stimulus.sourceContent, sourceAnchor.kind)
+  )
+    return false
   if (stimulus.materializationPolicy === 'Fixed')
     return Boolean(sourceAnchor) || hasPlacement
   return hasPlacement

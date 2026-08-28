@@ -1,4 +1,5 @@
 import type { Stimulus } from '../../model'
+import { hasConcreteContent } from '../../implementation/contentCarrier'
 import { type Finding, fail, pass } from '../types'
 
 export function validateStimulus(stimulus: Stimulus): Finding[] {
@@ -13,9 +14,7 @@ export function validateStimulus(stimulus: Stimulus): Finding[] {
       ? pass('STM-001', 'Stimulus declares a non-empty modality set.')
       : fail('STM-001', 'allowedModalities must be a non-empty set.', { path })
   )
-  const hasSource =
-    stimulus.sourceContent !== undefined &&
-    stimulus.sourceContent.trim().length > 0
+  const hasSource = hasConcreteContent(stimulus.sourceContent)
   const hasSpecification = Boolean(stimulus.contentSpecification?.trim())
   const policyValid =
     (stimulus.materializationPolicy === 'Fixed' && hasSource) ||

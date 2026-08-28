@@ -122,7 +122,8 @@ export function validateRelating(interaction: Relating): Finding[] {
   findings.push(
     sourceIds.length > 0 &&
       targetIds.length > 0 &&
-      unique([...sourceIds, ...targetIds])
+      unique(sourceIds) &&
+      unique(targetIds)
       ? pass(
           'REL-001',
           'Relating sets are non-empty and identifiers resolve unambiguously.'
