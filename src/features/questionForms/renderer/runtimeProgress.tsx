@@ -6,72 +6,143 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import type { QuestionDefinition, ResponseInteraction } from '@/domain/qd/model'
-import { isInteractionCorrect, isResponseCompleted } from './correctness'
-import { blockingPredecessorId } from './dependencyGate'
+import type { QuestionDefinition } from '@/domain/qd/model'
+import type {
+  DependencyRealization,
+  QuestionFormDefinition,
+} from '@/domain/qfd/model'
+import {
+  isInteractionCorrect,
+  isResponseCompleted,
+  type RendererResponseAcceptance,
+} from './correctness'
+import {
+  advanceDependencySatisfaction,
+  interactionDependencyState,
+} from './dependencyGate'
 
 interface RuntimeProgressValue {
   responses: Record<string, unknown>
-  setResponse: (interactionId: string, raw: unknown) => void
-  isCorrect: (interactionId: string) => boolean
-  isCompleted: (interactionId: string) => boolean
-  isUnlocked: (interactionId: string) => boolean
-  blockingPredecessor: (
-    interactionId: string
-  ) => ResponseInteraction | undefined
+  setResponse: (interactionRef: string, raw: unknown) => void
+  isCorrect: (interactionRef: string) => boolean
+  isCompleted: (interactionRef: string) => boolean
+  isAnswerable: (interactionRef: string) => boolean
+  isExposed: (interactionRef: string) => boolean
+  blockingDependencies: (
+    interactionRef: string
+  ) => readonly DependencyRealization[]
+}
+
+interface RuntimeState {
+  responses: Record<string, unknown>
+  satisfiedDependencies: ReadonlySet<string>
 }
 
 const RuntimeProgressContext = createContext<RuntimeProgressValue | null>(null)
 
-/** Tracks per-interaction responses and derives dependency gating from the QD's
- * `Dependency` constraints. A Required `RequiresCorrectness` dependency unlocks
- * its successor only when the predecessor is answered correctly; a Required
- * `RequiresCompletion` dependency unlocks it when the predecessor is answered. */
+/**
+ * Executes only concrete qfd.dependencyRealizations. Satisfaction is retained
+ * monotonically for the mounted runtime attempt; Sequence and
+ * InteractionPrecedence never participate in availability or exposure.
+ */
 export function RuntimeProgressProvider({
   qd,
+  qfd,
+  responseAcceptance,
   children,
 }: {
   qd: QuestionDefinition
+  qfd: QuestionFormDefinition
+  responseAcceptance?: RendererResponseAcceptance
   children: ReactNode
 }) {
-  const [responses, setResponses] = useState<Record<string, unknown>>({})
+  const [runtime, setRuntime] = useState<RuntimeState>({
+    responses: {},
+    satisfiedDependencies: new Set(),
+  })
 
   const value = useMemo<RuntimeProgressValue>(() => {
     const interactionById = new Map(
-      qd.responseInteractions.map((i) => [i.id, i])
+      qd.responseInteractions.map((interaction) => [
+        interaction.id,
+        interaction,
+      ])
+    )
+    const realizationByInteractionRef = new Map(
+      qfd.interactionRealizations.map((realization) => [
+        realization.interactionRef,
+        realization,
+      ])
     )
 
-    const isCorrect = (id: string): boolean => {
-      const interaction = interactionById.get(id)
-      return interaction
-        ? isInteractionCorrect(interaction, responses[id])
-        : false
-    }
-    const isCompleted = (id: string): boolean =>
-      isResponseCompleted(responses[id])
-
-    const blockingPredecessor = (
-      id: string
-    ): ResponseInteraction | undefined => {
-      const predecessorId = blockingPredecessorId(
-        id,
-        qd.constraints,
-        isCorrect,
-        isCompleted
+    const completedFrom = (
+      interactionRef: string,
+      responses: Record<string, unknown>
+    ): boolean => {
+      const interaction = interactionById.get(interactionRef)
+      const realization = realizationByInteractionRef.get(interactionRef)
+      return Boolean(
+        interaction &&
+        realization &&
+        isResponseCompleted(
+          interaction,
+          realization,
+          responses[interactionRef],
+          responseAcceptance
+        )
       )
-      return predecessorId ? interactionById.get(predecessorId) : undefined
     }
+    const correctFrom = (
+      interactionRef: string,
+      responses: Record<string, unknown>
+    ): boolean => {
+      const interaction = interactionById.get(interactionRef)
+      const realization = realizationByInteractionRef.get(interactionRef)
+      return Boolean(
+        interaction &&
+        realization &&
+        isInteractionCorrect(
+          interaction,
+          realization,
+          responses[interactionRef]
+        )
+      )
+    }
+    const stateFor = (interactionRef: string) =>
+      interactionDependencyState(
+        interactionRef,
+        qfd.dependencyRealizations,
+        runtime.satisfiedDependencies
+      )
 
     return {
-      responses,
-      setResponse: (id, raw) =>
-        setResponses((prev) => ({ ...prev, [id]: raw })),
-      isCorrect,
-      isCompleted,
-      isUnlocked: (id) => blockingPredecessor(id) === undefined,
-      blockingPredecessor,
+      responses: runtime.responses,
+      setResponse: (interactionRef, raw) =>
+        setRuntime((previous) => {
+          const responses = {
+            ...previous.responses,
+            [interactionRef]: raw,
+          }
+          const satisfiedDependencies = advanceDependencySatisfaction(
+            qfd.dependencyRealizations,
+            previous.satisfiedDependencies,
+            {
+              isCompleted: (id) => completedFrom(id, responses),
+              isCorrect: (id) => correctFrom(id, responses),
+            }
+          )
+          return { responses, satisfiedDependencies }
+        }),
+      isCorrect: (interactionRef) =>
+        correctFrom(interactionRef, runtime.responses),
+      isCompleted: (interactionRef) =>
+        completedFrom(interactionRef, runtime.responses),
+      isAnswerable: (interactionRef) => stateFor(interactionRef).isAnswerable,
+      isExposed: (interactionRef) => stateFor(interactionRef).isExposed,
+      blockingDependencies: (interactionRef) =>
+        stateFor(interactionRef).blockingDependencies,
     }
-  }, [qd, responses])
+  }, [qd, qfd, responseAcceptance, runtime])
 
   return (
     <RuntimeProgressContext.Provider value={value}>
@@ -81,24 +152,27 @@ export function RuntimeProgressProvider({
 }
 
 export function useRuntimeProgress(): RuntimeProgressValue {
-  const ctx = useContext(RuntimeProgressContext)
-  if (!ctx)
+  const context = useContext(RuntimeProgressContext)
+  if (!context) {
     throw new Error(
       'useRuntimeProgress must be used within a RuntimeProgressProvider'
     )
-  return ctx
+  }
+  return context
 }
 
-/** Reports a widget's canonical raw response to the runtime so dependency
- * gating and correctness derive from live response state. */
+/** Reports renderer raw output; acceptance occurs centrally against QD/QFD. */
 export function useReportResponse(
-  interactionId: string | undefined,
+  interactionRef: string | undefined,
   raw: unknown
 ): void {
   const { setResponse } = useRuntimeProgress()
-  const key = interactionId ? `${interactionId}:${JSON.stringify(raw)}` : ''
+  const responseKey = interactionRef
+    ? `${interactionRef}:${JSON.stringify(raw)}`
+    : ''
   useEffect(() => {
-    if (interactionId) setResponse(interactionId, raw)
+    if (interactionRef) setResponse(interactionRef, raw)
+    // setResponse is intentionally represented by responseKey for value changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key])
+  }, [responseKey])
 }

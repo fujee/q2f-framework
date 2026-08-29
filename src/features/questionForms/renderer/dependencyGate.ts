@@ -1,81 +1,72 @@
-import type { QuestionConstraint } from '@/domain/qd/model'
+import type { DependencyRealization } from '@/domain/qfd/model'
 
-type Prerequisite =
-  | { id: string; kind: 'correct' }
-  | { id: string; kind: 'completed' }
-  | { id: string; kind: 'available' }
+/** Runtime identity preserves the full QFD dependency semantic quadruple. */
+export function dependencyRuntimeKey(
+  dependency: DependencyRealization
+): string {
+  return [
+    dependency.predecessorInteractionRef,
+    dependency.successorInteractionRef,
+    dependency.rule,
+    dependency.exposurePolicy,
+  ].join('::')
+}
 
-/** Returns the id of the nearest unsatisfied prerequisite that blocks
- * `interactionId`, or undefined when it is unlocked. Both edge kinds are
- * followed transitively:
- *
- * - Required `Dependency` gates on the predecessor being correct
- *   (`RequiresCorrectness`) or answered (`RequiresCompletion`);
- * - Required `Sequence` gates a successor on its immediate predecessor being
- *   *available* (i.e. the predecessor's own prerequisites are satisfied).
+export interface DependencyEvidence {
+  isCompleted: (interactionRef: string) => boolean
+  isCorrect: (interactionRef: string) => boolean
+}
+
+/**
+ * Adds newly satisfied concrete QFD dependencies while retaining every
+ * previously satisfied dependency. The returned state is monotonic for one
+ * runtime attempt: later response edits cannot remove satisfaction.
  */
-export function blockingPredecessorId(
-  interactionId: string,
-  constraints: QuestionConstraint[],
-  isCorrect: (id: string) => boolean,
-  isCompleted: (id: string) => boolean
-): string | undefined {
-  const memo = new Map<string, string | undefined>()
-  const visiting = new Set<string>()
-
-  const blockingOf = (id: string): string | undefined => {
-    if (memo.has(id)) return memo.get(id)
-    if (visiting.has(id)) return undefined // defensive: the required graph is acyclic
-    visiting.add(id)
-
-    const prerequisites: Prerequisite[] = []
-    for (const constraint of constraints) {
-      if (constraint.type === 'Dependency') {
-        if (
-          constraint.strength === 'Required' &&
-          constraint.successorInteractionRef === id
-        ) {
-          prerequisites.push({
-            id: constraint.predecessorInteractionRef,
-            kind:
-              constraint.rule === 'RequiresCorrectness'
-                ? 'correct'
-                : 'completed',
-          })
-        }
-      } else if (constraint.strength === 'Required') {
-        const index = constraint.interactionRefs.indexOf(id)
-        if (index > 0) {
-          prerequisites.push({
-            id: constraint.interactionRefs[index - 1],
-            kind: 'available',
-          })
-        }
-      }
-    }
-
-    let result: string | undefined
-    for (const prerequisite of prerequisites) {
-      const blocker =
-        prerequisite.kind === 'correct'
-          ? isCorrect(prerequisite.id)
-            ? undefined
-            : prerequisite.id
-          : prerequisite.kind === 'completed'
-            ? isCompleted(prerequisite.id)
-              ? undefined
-              : prerequisite.id
-            : blockingOf(prerequisite.id)
-      if (blocker) {
-        result = blocker
-        break
-      }
-    }
-
-    visiting.delete(id)
-    memo.set(id, result)
-    return result
+export function advanceDependencySatisfaction(
+  dependencies: readonly DependencyRealization[],
+  previouslySatisfied: ReadonlySet<string>,
+  evidence: DependencyEvidence
+): ReadonlySet<string> {
+  const satisfied = new Set(previouslySatisfied)
+  for (const dependency of dependencies) {
+    const key = dependencyRuntimeKey(dependency)
+    if (satisfied.has(key)) continue
+    const nowSatisfied =
+      dependency.rule === 'RequiresCorrectness'
+        ? evidence.isCorrect(dependency.predecessorInteractionRef)
+        : evidence.isCompleted(dependency.predecessorInteractionRef)
+    if (nowSatisfied) satisfied.add(key)
   }
+  return satisfied
+}
 
-  return blockingOf(interactionId)
+export interface InteractionDependencyState {
+  blockingDependencies: DependencyRealization[]
+  isAnswerable: boolean
+  isExposed: boolean
+}
+
+/**
+ * Answerability and exposure are independent. Every unsatisfied realized QFD
+ * dependency blocks answerability; only an unsatisfied concealed dependency
+ * hides successor-specific realization units. Sequence and
+ * InteractionPrecedence are intentionally absent from this API.
+ */
+export function interactionDependencyState(
+  interactionRef: string,
+  dependencies: readonly DependencyRealization[],
+  satisfiedDependencies: ReadonlySet<string>
+): InteractionDependencyState {
+  const blockingDependencies = dependencies.filter(
+    (dependency) =>
+      dependency.successorInteractionRef === interactionRef &&
+      !satisfiedDependencies.has(dependencyRuntimeKey(dependency))
+  )
+  return {
+    blockingDependencies,
+    isAnswerable: blockingDependencies.length === 0,
+    isExposed: !blockingDependencies.some(
+      ({ exposurePolicy }) => exposurePolicy === 'ConcealedUntilSatisfied'
+    ),
+  }
 }

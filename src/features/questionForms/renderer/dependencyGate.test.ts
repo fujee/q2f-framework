@@ -1,135 +1,161 @@
 import { describe, expect, it } from 'vitest'
-import { blockingPredecessorId } from './dependencyGate'
-import type { QuestionConstraint } from '@/domain/qd/model'
-import { q12Qd } from '@/domain/qfd/fixtures/qfdFixtures'
+import type { DependencyRealization } from '@/domain/qfd/model'
+import { FROZEN_PRIMARY_CASES } from '@/domain/evaluation/frozenProtocolFixtures'
+import {
+  advanceDependencySatisfaction,
+  dependencyRuntimeKey,
+  interactionDependencyState,
+} from './dependencyGate'
 
-const chain: QuestionConstraint[] = [
-  {
-    id: 'd1',
-    type: 'Dependency',
-    strength: 'Required',
-    predecessorInteractionRef: 'i1',
-    successorInteractionRef: 'i2',
-    rule: 'RequiresCorrectness',
-  },
-  {
-    id: 'd2',
-    type: 'Dependency',
-    strength: 'Required',
-    predecessorInteractionRef: 'i2',
-    successorInteractionRef: 'i3',
-    rule: 'RequiresCorrectness',
-  },
-  {
-    id: 's1',
-    type: 'Sequence',
-    strength: 'Required',
-    interactionRefs: ['i2', 'i3'],
-  },
-]
+const completionDependency: DependencyRealization = {
+  predecessorInteractionRef: 'a',
+  successorInteractionRef: 'b',
+  rule: 'RequiresCompletion',
+  exposurePolicy: 'Unrestricted',
+}
 
-function gate() {
-  const correct = new Set<string>()
-  const completed = new Set<string>()
+const correctnessDependency: DependencyRealization = {
+  predecessorInteractionRef: 'c',
+  successorInteractionRef: 'b',
+  rule: 'RequiresCorrectness',
+  exposurePolicy: 'ConcealedUntilSatisfied',
+}
+
+function evidence(completed: string[] = [], correct: string[] = []) {
+  const completedSet = new Set(completed)
+  const correctSet = new Set(correct)
   return {
-    correct,
-    completed,
-    isCorrect: (id: string) => correct.has(id),
-    isCompleted: (id: string) => completed.has(id),
+    isCompleted: (id: string) => completedSet.has(id),
+    isCorrect: (id: string) => correctSet.has(id),
   }
 }
 
-describe('blockingPredecessorId', () => {
-  it('blocks a successor until its RequiresCorrectness predecessor is correct', () => {
-    const { correct, isCorrect, isCompleted } = gate()
-    expect(blockingPredecessorId('i2', chain, isCorrect, isCompleted)).toBe(
-      'i1'
+describe('concrete QFD dependency execution', () => {
+  it('Sequence alone never locks an interaction', () => {
+    expect(interactionDependencyState('b', [], new Set())).toEqual({
+      blockingDependencies: [],
+      isAnswerable: true,
+      isExposed: true,
+    })
+  })
+
+  it('InteractionPrecedence alone never locks an interaction', () => {
+    const precedenceOnly = {
+      interactionPrecedences: [
+        { beforeInteractionRef: 'a', afterInteractionRef: 'b' },
+      ],
+      dependencyRealizations: [],
+    }
+    expect(
+      interactionDependencyState(
+        'b',
+        precedenceOnly.dependencyRealizations,
+        new Set()
+      ).isAnswerable
+    ).toBe(true)
+  })
+
+  it('Unrestricted leaves a blocked successor exposed', () => {
+    expect(
+      interactionDependencyState('b', [completionDependency], new Set())
+    ).toMatchObject({ isAnswerable: false, isExposed: true })
+  })
+
+  it('ConcealedUntilSatisfied leaves a blocked successor unexposed', () => {
+    expect(
+      interactionDependencyState('b', [correctnessDependency], new Set())
+    ).toMatchObject({ isAnswerable: false, isExposed: false })
+  })
+
+  it('RequiresCompletion and RequiresCorrectness use their independent evidence', () => {
+    const dependencies = [completionDependency, correctnessDependency]
+    const onlyCompleted = advanceDependencySatisfaction(
+      dependencies,
+      new Set(),
+      evidence(['a', 'c'])
     )
-    correct.add('i1')
-    expect(
-      blockingPredecessorId('i2', chain, isCorrect, isCompleted)
-    ).toBeUndefined()
-  })
-
-  it('propagates gating transitively through a chain of more than two interactions', () => {
-    const { correct, isCorrect, isCompleted } = gate()
-    // i3 depends on i2, which depends on i1. Neither is correct yet.
-    expect(blockingPredecessorId('i3', chain, isCorrect, isCompleted)).toBe(
-      'i2'
+    expect(onlyCompleted.has(dependencyRuntimeKey(completionDependency))).toBe(
+      true
     )
-    // i2 becomes correct, but its own prerequisite i1 is still not — i3 stays
-    // blocked transitively by i1.
-    correct.add('i2')
-    expect(blockingPredecessorId('i3', chain, isCorrect, isCompleted)).toBe(
-      'i1'
+    expect(onlyCompleted.has(dependencyRuntimeKey(correctnessDependency))).toBe(
+      false
     )
-    correct.add('i1')
-    expect(
-      blockingPredecessorId('i3', chain, isCorrect, isCompleted)
-    ).toBeUndefined()
+
+    const both = advanceDependencySatisfaction(
+      dependencies,
+      onlyCompleted,
+      evidence(['a', 'c'], ['c'])
+    )
+    expect(interactionDependencyState('b', dependencies, both)).toMatchObject({
+      isAnswerable: true,
+      isExposed: true,
+    })
   })
 
-  it('RequiresCompletion is satisfied by any non-empty response', () => {
-    const { completed, isCorrect, isCompleted } = gate()
-    const deps: QuestionConstraint[] = [
-      {
-        id: 'c1',
-        type: 'Dependency',
-        strength: 'Required',
-        predecessorInteractionRef: 'a',
-        successorInteractionRef: 'b',
-        rule: 'RequiresCompletion',
-      },
-    ]
-    expect(blockingPredecessorId('b', deps, isCorrect, isCompleted)).toBe('a')
-    completed.add('a')
+  it('satisfaction is monotonic after later predecessor edits', () => {
+    const satisfied = advanceDependencySatisfaction(
+      [correctnessDependency],
+      new Set(),
+      evidence(['c'], ['c'])
+    )
+    const afterInvalidEdit = advanceDependencySatisfaction(
+      [correctnessDependency],
+      satisfied,
+      evidence()
+    )
+    expect(afterInvalidEdit).toEqual(satisfied)
     expect(
-      blockingPredecessorId('b', deps, isCorrect, isCompleted)
-    ).toBeUndefined()
+      interactionDependencyState('b', [correctnessDependency], afterInvalidEdit)
+        .isAnswerable
+    ).toBe(true)
   })
 
-  it('ignores Preferred dependencies and non-dependency constraints', () => {
-    const { isCorrect, isCompleted } = gate()
-    const deps: QuestionConstraint[] = [
-      {
-        id: 'p1',
-        type: 'Dependency',
-        strength: 'Preferred',
-        predecessorInteractionRef: 'x',
-        successorInteractionRef: 'y',
-        rule: 'RequiresCorrectness',
-      },
-    ]
-    expect(
-      blockingPredecessorId('y', deps, isCorrect, isCompleted)
-    ).toBeUndefined()
+  it('requires every realized dependency targeting one successor', () => {
+    const dependencies = [completionDependency, correctnessDependency]
+    const oneSatisfied = new Set([dependencyRuntimeKey(completionDependency)])
+    const state = interactionDependencyState('b', dependencies, oneSatisfied)
+    expect(state.isAnswerable).toBe(false)
+    expect(state.isExposed).toBe(false)
+    expect(state.blockingDependencies).toEqual([correctnessDependency])
   })
 
-  it('Q12: I3 is gated transitively — I1 → I2 (dependency) → I3 (sequence)', () => {
-    const { correct, isCorrect, isCompleted } = gate()
-    const constraints = q12Qd.constraints
+  it('does not collapse dependencies sharing a predecessor/successor pair', () => {
+    const samePair = {
+      ...correctnessDependency,
+      predecessorInteractionRef: 'a',
+    }
+    expect(dependencyRuntimeKey(completionDependency)).not.toBe(
+      dependencyRuntimeKey(samePair)
+    )
+    expect(
+      interactionDependencyState(
+        'b',
+        [completionDependency, samePair],
+        new Set([dependencyRuntimeKey(completionDependency)])
+      ).blockingDependencies
+    ).toEqual([samePair])
+  })
 
-    // I1 has no prerequisite.
+  it('Q12 gates I2 by I1 correctness while Sequence does not gate I3', () => {
+    const q12 = FROZEN_PRIMARY_CASES.find(
+      ({ id }) => id === 'Q12-InteractiveWebProfile-Required-realized'
+    )
+    if (!q12) throw new Error('Missing frozen Q12 fixture.')
+    const dependencies = q12.qfd.dependencyRealizations
     expect(
-      blockingPredecessorId('i1', constraints, isCorrect, isCompleted)
-    ).toBeUndefined()
-    // I2 is gated by I1 correctness.
+      interactionDependencyState('i2', dependencies, new Set())
+    ).toMatchObject({ isAnswerable: false, isExposed: false })
     expect(
-      blockingPredecessorId('i2', constraints, isCorrect, isCompleted)
-    ).toBe('i1')
-    // I3 has no Dependency, but its Required Sequence [i2, i3] makes it depend on
-    // I2's availability, which transitively depends on I1 correctness.
-    expect(
-      blockingPredecessorId('i3', constraints, isCorrect, isCompleted)
-    ).toBe('i1')
+      interactionDependencyState('i3', dependencies, new Set())
+    ).toMatchObject({ isAnswerable: true, isExposed: true })
 
-    correct.add('i1')
-    // I1 correct → I2 available, and I3 becomes available with it.
+    const satisfied = advanceDependencySatisfaction(
+      dependencies,
+      new Set(),
+      evidence(['i1'], ['i1'])
+    )
     expect(
-      blockingPredecessorId('i2', constraints, isCorrect, isCompleted)
-    ).toBeUndefined()
-    expect(
-      blockingPredecessorId('i3', constraints, isCorrect, isCompleted)
-    ).toBeUndefined()
+      interactionDependencyState('i2', dependencies, satisfied).isAnswerable
+    ).toBe(true)
   })
 })
