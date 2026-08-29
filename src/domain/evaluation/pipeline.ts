@@ -1,5 +1,6 @@
 import type { QuestionDefinition } from '../qd/model'
-import type { QuestionFormDefinition, QuestionFormProfile } from '../qfd/model'
+import type { QuestionFormDefinition } from '../qfd/model'
+import type { QuestionFormProfile } from '../qfd/profiles/model'
 import type { Finding, ValidationResult } from '../shared/findings'
 import { validateQD } from '../qd/validation/validateQD'
 import { validateQFD } from '../qfd/validation/validateQFD'
@@ -7,14 +8,20 @@ import { evaluateProfileFeasibility } from '../qfd/feasibility/evaluateProfileFe
 import type { FeasibilityResult } from '../qfd/feasibility/evaluateProfileFeasibility'
 import { evaluateConformance } from '../qfd/conformance/evaluateConformance'
 import type { ConformanceResult } from '../qfd/conformance/evaluateConformance'
+import type { ConformanceEvidence } from '../qfd/conformance/evidence'
+import {
+  applyConformanceAdjudications,
+  type AdjudicatedConformanceResult,
+  type ReviewAdjudicationDecision,
+} from '../qfd/conformance/adjudication'
 
 /**
- * Canonical evaluation pipeline (CODEX_EVALUATION_PROTOCOL_FROZEN_V1_EN Section 3):
+ * Frozen Evaluation Protocol v2 pipeline:
  *
  *   validateQD(qd)
- *   validateQFD(qfd, qd)
+ *   validateQFD(qfd, qd, profile)
  *   evaluateProfileFeasibility(qd, qfd, profile)
- *   evaluateConformance(qd, qfd, profile)
+ *   evaluateConformance(qd, qfd, externalEvidence)
  *
  * with the prerequisite execution policy of Section 3.4:
  *   - QD validation FAIL  -> QFD validation, feasibility, conformance NOT_EVALUATED
@@ -23,60 +30,92 @@ import type { ConformanceResult } from '../qfd/conformance/evaluateConformance'
  *     feasibility is INFEASIBLE (an infeasible QFD is not automatically
  *     non-conformant).
  *
- * `null` represents NOT_EVALUATED for the downstream stages.
+ * A null stage result is serialized as NOT_EVALUATED by observedOutcome().
  */
+
+export const FROZEN_EVALUATION_BASELINE = {
+  protocol: 'Evaluation Protocol v2',
+  specificationCommit: 'ad6cccc765f99a84b9681cb8e8013b6b3ee5248f',
+} as const
+
+export type EvaluationStageStatus =
+  | 'PASS'
+  | 'FAIL'
+  | 'FEASIBLE'
+  | 'FEASIBLE_WITH_WARNINGS'
+  | 'INFEASIBLE'
+  | 'CONFORMANT'
+  | 'CONFORMANT_WITH_WARNINGS'
+  | 'REVIEW_REQUIRED'
+  | 'NON_CONFORMANT'
+  | 'NOT_EVALUATED'
+
+export interface EvaluationOptions {
+  conformanceEvidence?: ConformanceEvidence
+  adjudications?: ReviewAdjudicationDecision[]
+}
 
 export interface EvaluationRecord {
   caseId: string
-  baselineVersions: { qd: 'QD-FB-2.1'; qfd: 'QFD-FB-1.2' }
+  baseline: typeof FROZEN_EVALUATION_BASELINE
   profileId: string
   qdValidation: ValidationResult | null
   qfdValidation: ValidationResult | null
   feasibility: FeasibilityResult | null
-  conformance: ConformanceResult | null
-  /** Reserved for mechanism-response normalization checks; populated by tests. */
-  normalizationChecks: unknown[]
+  preAdjudicationConformance: ConformanceResult | null
+  conformance: ConformanceResult | AdjudicatedConformanceResult | null
 }
 
 export function runEvaluationPipeline(
   caseId: string,
   qd: QuestionDefinition,
   qfd: QuestionFormDefinition,
-  profile: QuestionFormProfile
+  profile: QuestionFormProfile,
+  options: EvaluationOptions = {}
 ): EvaluationRecord {
   const record: EvaluationRecord = {
     caseId,
-    baselineVersions: { qd: 'QD-FB-2.1', qfd: 'QFD-FB-1.2' },
+    baseline: FROZEN_EVALUATION_BASELINE,
     profileId: profile.id,
     qdValidation: null,
     qfdValidation: null,
     feasibility: null,
+    preAdjudicationConformance: null,
     conformance: null,
-    normalizationChecks: [],
   }
 
   record.qdValidation = validateQD(qd)
   if (record.qdValidation.aggregate === 'FAIL') return record
 
-  record.qfdValidation = validateQFD(qfd, qd)
+  record.qfdValidation = validateQFD(qfd, qd, profile)
   if (record.qfdValidation.aggregate === 'FAIL') return record
 
   record.feasibility = evaluateProfileFeasibility(qd, qfd, profile)
-  record.conformance = evaluateConformance(qd, qfd, profile)
+  record.preAdjudicationConformance = evaluateConformance(
+    qd,
+    qfd,
+    options.conformanceEvidence
+  )
+  record.conformance = options.adjudications?.length
+    ? applyConformanceAdjudications(
+        record.preAdjudicationConformance,
+        options.adjudications
+      )
+    : record.preAdjudicationConformance
   return record
 }
 
 export interface ExpectedAggregates {
-  qdValidation?: string
-  qfdValidation?: string
-  feasibility?: string
-  conformance?: string
+  qdValidation?: EvaluationStageStatus
+  qfdValidation?: EvaluationStageStatus
+  feasibility?: EvaluationStageStatus
+  conformance?: EvaluationStageStatus
 }
 
 export interface CaseEvaluation {
   record: EvaluationRecord
   expectedOutcome: ExpectedAggregates
-  observedOutcome: Record<string, string | null>
+  observedOutcome: Record<keyof ExpectedAggregates, EvaluationStageStatus>
   match: boolean
 }
 
@@ -86,15 +125,11 @@ export function evaluateCase(
   qd: QuestionDefinition,
   qfd: QuestionFormDefinition,
   profile: QuestionFormProfile,
-  expected: ExpectedAggregates
+  expected: ExpectedAggregates,
+  options: EvaluationOptions = {}
 ): CaseEvaluation {
-  const record = runEvaluationPipeline(caseId, qd, qfd, profile)
-  const observed: Record<string, string | null> = {
-    qdValidation: record.qdValidation?.aggregate ?? null,
-    qfdValidation: record.qfdValidation?.aggregate ?? null,
-    feasibility: record.feasibility?.aggregate ?? null,
-    conformance: record.conformance?.aggregate ?? null,
-  }
+  const record = runEvaluationPipeline(caseId, qd, qfd, profile, options)
+  const observed = observedOutcome(record)
   const keys = [
     'qdValidation',
     'qfdValidation',
@@ -106,6 +141,17 @@ export function evaluateCase(
     return exp === undefined || exp === observed[key]
   })
   return { record, expectedOutcome: expected, observedOutcome: observed, match }
+}
+
+export function observedOutcome(
+  record: EvaluationRecord
+): Record<keyof ExpectedAggregates, EvaluationStageStatus> {
+  return {
+    qdValidation: record.qdValidation?.aggregate ?? 'NOT_EVALUATED',
+    qfdValidation: record.qfdValidation?.aggregate ?? 'NOT_EVALUATED',
+    feasibility: record.feasibility?.aggregate ?? 'NOT_EVALUATED',
+    conformance: record.conformance?.aggregate ?? 'NOT_EVALUATED',
+  }
 }
 
 /** Convenience for filtering the findings of one stage across a full record. */

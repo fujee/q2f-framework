@@ -1,12 +1,55 @@
 import type { DependencyConstraint, QuestionDefinition } from '../../qd/model'
 import { fail, pass, warning, type Finding } from '../../shared/findings'
 import type { QuestionFormDefinition } from '../model'
+import { dependencyEvidenceKey, type ConformanceEvidence } from './evidence'
 
 export function validateSequenceAndDependencyConformance(
   qd: QuestionDefinition,
-  qfd: QuestionFormDefinition
+  qfd: QuestionFormDefinition,
+  evidence: ConformanceEvidence = {}
 ): Finding[] {
-  return [validateSequence(qd, qfd), ...validateDependencies(qd, qfd)]
+  return [
+    validateSequence(qd, qfd),
+    ...validateDependencies(qd, qfd),
+    ...validateDependencyExposure(qd, qfd, evidence),
+  ]
+}
+
+function validateDependencyExposure(
+  qd: QuestionDefinition,
+  qfd: QuestionFormDefinition,
+  evidence: ConformanceEvidence
+): Finding[] {
+  const strengths = new Map(
+    [...normalizeQdDependencies(qd).entries()].map(([key, dependency]) => [
+      key,
+      dependency.strength,
+    ])
+  )
+  return qfd.dependencyRealizations.flatMap((dependency) => {
+    if (dependency.exposurePolicy !== 'ConcealedUntilSatisfied') return []
+    const key = dependencyEvidenceKey(dependency)
+    if (evidence.prematurelyExposedDependencyKeys?.has(key))
+      return [
+        strengths.get(key) === 'Preferred'
+          ? warning(
+              'CONF-DEP-EXP-001',
+              `Preferred dependency '${key}' prematurely exposes successor-specific units.`
+            )
+          : fail(
+              'CONF-DEP-EXP-001',
+              `Required dependency '${key}' prematurely exposes successor-specific units.`
+            ),
+      ]
+    if (evidence.verifiedConcealedDependencyKeys?.has(key))
+      return [
+        pass(
+          'CONF-DEP-EXP-001',
+          `Successor-specific units for '${key}' remain concealed; shared content may remain visible.`
+        ),
+      ]
+    return []
+  })
 }
 
 function validateSequence(

@@ -13,6 +13,12 @@ export interface ConformanceEvidence {
   trustedRelationNotationInteractionRefs?: ReadonlySet<string>
   trustedReferencedGapKeys?: ReadonlySet<string>
   trustedArtifactInteractionRefs?: ReadonlySet<string>
+  /**
+   * Evaluation/runtime observation of successor-specific units, kept outside
+   * the scientific QD/QFD models. Shared content visibility is not listed.
+   */
+  verifiedConcealedDependencyKeys?: ReadonlySet<string>
+  prematurelyExposedDependencyKeys?: ReadonlySet<string>
 }
 
 export function workspaceBindingKey(
@@ -20,4 +26,18 @@ export function workspaceBindingKey(
   elementRef: string
 ): string {
   return `${interactionRef}::${elementRef}`
+}
+
+export function dependencyEvidenceKey(dependency: {
+  predecessorInteractionRef: string
+  successorInteractionRef: string
+  rule: string
+  exposurePolicy: string
+}): string {
+  return [
+    dependency.predecessorInteractionRef,
+    dependency.successorInteractionRef,
+    dependency.rule,
+    dependency.exposurePolicy,
+  ].join('::')
 }

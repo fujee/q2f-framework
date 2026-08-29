@@ -30,7 +30,7 @@ export function evaluateConformance(
     ...validatePresentationConformance(qd, qfd, evidence),
     ...validateInteractionConformance(qd, qfd, evidence),
     ...validateWorkspaceConformance(qd, qfd, evidence),
-    ...validateSequenceAndDependencyConformance(qd, qfd),
+    ...validateSequenceAndDependencyConformance(qd, qfd, evidence),
   ]
   return { findings, aggregate: aggregateOverall(findings) }
 }
