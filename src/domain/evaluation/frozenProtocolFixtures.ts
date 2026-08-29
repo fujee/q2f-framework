@@ -18,11 +18,60 @@ import type {
   StimulusRealization,
 } from '../qfd/model'
 import type { QuestionFormProfile } from '../qfd/profiles/model'
-import {
-  CONVENTIONAL_PAPER_PROFILE,
-  INTERACTIVE_WEB_PROFILE,
-} from '../qfd/profiles/registry'
 import type { EvaluationOptions, ExpectedAggregates } from './pipeline'
+
+export const INTERACTIVE_WEB_PROFILE: QuestionFormProfile = {
+  id: 'InteractiveWebProfile',
+  supportedStimulusModalities: ['Text', 'Image', 'Audio', 'Video'],
+  capabilities: [
+    'TextualPresentation',
+    'ExpandedSelection',
+    'CollapsedSelection',
+    'DirectWorkspaceSelection',
+    'DirectOrdering',
+    'DirectRelationConstruction',
+    'DirectItemPlacement',
+    'EmbeddedGapResponse',
+    'ScalarResponse',
+    'ExtendedTextResponse',
+    'DigitalArtifactSubmission',
+    'PointMarking',
+    'RegionMarking',
+    'TextSpanMarking',
+    'HorizontalComposition',
+    'VerticalComposition',
+    'TextAnchoredPlacement',
+    'RegionAnchoredPlacement',
+    'LogicalInteractionPrecedence',
+    'CompletionGating',
+    'CorrectnessGating',
+    'ConditionalConcealment',
+  ],
+}
+
+export const CONVENTIONAL_PAPER_PROFILE: QuestionFormProfile = {
+  id: 'ConventionalPaperProfile',
+  supportedStimulusModalities: ['Text', 'Image'],
+  capabilities: [
+    'TextualPresentation',
+    'ExpandedSelection',
+    'ReferencedWorkspaceSelection',
+    'OrderNotation',
+    'RelationNotation',
+    'EmbeddedGapResponse',
+    'ScalarResponse',
+    'ExtendedTextResponse',
+    'PhysicalArtifactSubmission',
+    'PointMarking',
+    'RegionMarking',
+    'TextSpanMarking',
+    'HorizontalComposition',
+    'VerticalComposition',
+    'TextAnchoredPlacement',
+    'RegionAnchoredPlacement',
+    'LogicalInteractionPrecedence',
+  ],
+}
 
 export interface FrozenEvaluationCase {
   id: string
@@ -66,6 +115,13 @@ function group(ids: string[]): LayoutElement {
     kind: 'LayoutGroup',
     orientation: 'Horizontal',
     children: ids.map((id) => placement('ElementPresentation', id)),
+  }
+}
+
+function taskInstruction(interactionRef: string) {
+  return {
+    id: `${interactionRef}-task`,
+    role: 'TaskInstruction' as const,
   }
 }
 
@@ -218,7 +274,7 @@ function selecting(
   return {
     type: 'SelectingRealization',
     interactionRef,
-    instructionRealizations: [],
+    instructionRealizations: [taskInstruction(interactionRef)],
     standaloneSelection: {
       id: `${interactionRef}-selection`,
       mode,
@@ -244,7 +300,7 @@ function ordering(
   return {
     type: 'OrderingRealization',
     interactionRef,
-    instructionRealizations: [],
+    instructionRealizations: [taskInstruction(interactionRef)],
     mode,
     presentation: {
       id: `${interactionRef}-ordering`,
@@ -257,7 +313,7 @@ function ordering(
 function relating(
   mode: 'DirectRelationConstruction' | 'RelationNotation'
 ): InteractionRealization {
-  const source = ['country-a', 'country-b'].map((relatingElementRef) =>
+  const source = ['france', 'italy', 'spain'].map((relatingElementRef) =>
     element(`rel-${relatingElementRef}-source-p`, {
       kind: 'RelatingElement',
       interactionRef: 'rel',
@@ -265,7 +321,7 @@ function relating(
       relatingElementRef,
     })
   )
-  const target = ['capital-a', 'capital-b'].map((relatingElementRef) =>
+  const target = ['paris', 'rome', 'madrid'].map((relatingElementRef) =>
     element(`rel-${relatingElementRef}-target-p`, {
       kind: 'RelatingElement',
       interactionRef: 'rel',
@@ -276,7 +332,7 @@ function relating(
   return {
     type: 'RelatingRealization',
     interactionRef: 'rel',
-    instructionRealizations: [],
+    instructionRealizations: [taskInstruction('rel')],
     mode,
     sourceSetPresentation: {
       id: 'rel-source',
@@ -298,7 +354,7 @@ function scalar(interactionRef: string): InteractionRealization {
   return {
     type: 'ShortInputRealization',
     interactionRef,
-    instructionRealizations: [],
+    instructionRealizations: [taskInstruction(interactionRef)],
     responseSite: { id: `${interactionRef}-site` },
   }
 }
@@ -307,7 +363,7 @@ function essay(interactionRef: string): InteractionRealization {
   return {
     type: 'EssayRealization',
     interactionRef,
-    instructionRealizations: [],
+    instructionRealizations: [taskInstruction(interactionRef)],
     responseSite: { id: `${interactionRef}-site` },
   }
 }
@@ -343,12 +399,15 @@ function makeQ1(profile: QuestionFormProfile): FrozenEvaluationCase {
     {
       id: 'select',
       type: 'Selecting',
-      minSelections: 1,
-      maxSelections: 1,
+      instruction: 'Select exactly two noble gases.',
+      minSelections: 2,
+      maxSelections: 2,
       standaloneChoiceOrderPolicy: 'Permutable',
       choices: [
-        { id: 'a', semanticContent: 'Alpha', isCorrect: true },
-        { id: 'b', semanticContent: 'Beta', isCorrect: false },
+        { id: 'he', semanticContent: 'Helium', isCorrect: true },
+        { id: 'o', semanticContent: 'Oxygen', isCorrect: false },
+        { id: 'ne', semanticContent: 'Neon', isCorrect: true },
+        { id: 'n', semanticContent: 'Nitrogen', isCorrect: false },
       ],
     },
   ])
@@ -356,7 +415,9 @@ function makeQ1(profile: QuestionFormProfile): FrozenEvaluationCase {
   return {
     id: `Q1-${profile.id}`,
     qd: question,
-    qfd: buildQfd(question, profile, [selecting('select', ['a', 'b'], mode)]),
+    qfd: buildQfd(question, profile, [
+      selecting('select', ['he', 'o', 'ne', 'n'], mode),
+    ]),
     profile,
     expected: PASS,
   }
@@ -367,13 +428,15 @@ function makeQ2(profile: QuestionFormProfile): FrozenEvaluationCase {
     {
       id: 'order',
       type: 'Ordering',
+      instruction: 'Put the phases of mitosis in order from first to last.',
       itemOrderPolicy: 'Permutable',
       orderingItems: [
-        { id: 'first', semanticContent: 'First' },
-        { id: 'second', semanticContent: 'Second' },
-        { id: 'third', semanticContent: 'Third' },
+        { id: 'metaphase', semanticContent: 'Metaphase' },
+        { id: 'telophase', semanticContent: 'Telophase' },
+        { id: 'prophase', semanticContent: 'Prophase' },
+        { id: 'anaphase', semanticContent: 'Anaphase' },
       ],
-      correctOrder: ['first', 'second', 'third'],
+      correctOrder: ['prophase', 'metaphase', 'anaphase', 'telophase'],
     },
   ])
   const mode =
@@ -382,7 +445,11 @@ function makeQ2(profile: QuestionFormProfile): FrozenEvaluationCase {
     id: `Q2-${profile.id}`,
     qd: question,
     qfd: buildQfd(question, profile, [
-      ordering('order', ['first', 'second', 'third'], mode),
+      ordering(
+        'order',
+        ['metaphase', 'telophase', 'prophase', 'anaphase'],
+        mode
+      ),
     ]),
     profile,
     expected: PASS,
@@ -396,36 +463,39 @@ function makeQ3(profile: QuestionFormProfile): FrozenEvaluationCase {
       {
         id: 'rel',
         type: 'Relating',
+        instruction: 'Match each country to its capital.',
         mappingType: 'OneToOne',
         sourceParticipationPolicy: 'Required',
         sourceSet: {
-          label: 'Countries',
           elementOrderPolicy: 'Fixed',
           relatingElements: [
-            { id: 'country-a', semanticContent: 'Country A' },
-            { id: 'country-b', semanticContent: 'Country B' },
+            { id: 'france', semanticContent: 'France' },
+            { id: 'italy', semanticContent: 'Italy' },
+            { id: 'spain', semanticContent: 'Spain' },
           ],
         },
         targetSet: {
-          label: 'Capitals',
           elementOrderPolicy: 'Fixed',
           relatingElements: [
-            { id: 'capital-a', semanticContent: 'Capital A' },
-            { id: 'capital-b', semanticContent: 'Capital B' },
+            { id: 'paris', semanticContent: 'Paris' },
+            { id: 'rome', semanticContent: 'Rome' },
+            { id: 'madrid', semanticContent: 'Madrid' },
           ],
         },
         correctRelations: [
-          { sourceElementRef: 'country-a', targetElementRef: 'capital-a' },
-          { sourceElementRef: 'country-b', targetElementRef: 'capital-b' },
+          { sourceElementRef: 'france', targetElementRef: 'paris' },
+          { sourceElementRef: 'italy', targetElementRef: 'rome' },
+          { sourceElementRef: 'spain', targetElementRef: 'madrid' },
         ],
       },
     ],
     [
       {
         id: 'q3-text',
-        sourceContent: referenceContentCarrier('Reference passage.', {
-          text: true,
-        }),
+        sourceContent: referenceContentCarrier(
+          'France has Paris as its capital. Italy has Rome as its capital. Spain has Madrid as its capital.',
+          { text: true }
+        ),
         allowedModalities: ['Text'],
         materializationPolicy: 'Fixed',
       },
@@ -461,7 +531,9 @@ function completingRealization(
   mode: 'DirectPlacement' | 'ItemSelection',
   stimulusRef = 'q4-sr',
   gapIds = ['gap-a', 'gap-b'],
-  withRealizationAnchors = false
+  itemIds = ['item-a', 'item-b'],
+  withRealizationAnchors = false,
+  includeTaskInstruction = true
 ): CompletingRealization {
   const gapRealizations = gapIds.map((gapRef) => {
     if (mode === 'DirectPlacement')
@@ -480,7 +552,7 @@ function completingRealization(
             }
           : {}),
       }
-    const options = ['item-a', 'item-b'].map((completingItemRef) =>
+    const options = itemIds.map((completingItemRef) =>
       element(`${gapRef}-${completingItemRef}-p`, {
         kind: 'CompletingItem',
         interactionRef: 'complete',
@@ -509,7 +581,7 @@ function completingRealization(
       },
     }
   })
-  const source = ['item-a', 'item-b'].map((completingItemRef) =>
+  const source = itemIds.map((completingItemRef) =>
     element(`source-${completingItemRef}-p`, {
       kind: 'CompletingItem',
       interactionRef: 'complete',
@@ -519,7 +591,9 @@ function completingRealization(
   return {
     type: 'CompletingRealization',
     interactionRef: 'complete',
-    instructionRealizations: [],
+    instructionRealizations: includeTaskInstruction
+      ? [taskInstruction('complete')]
+      : [],
     gapRealizations,
     ...(mode === 'DirectPlacement'
       ? {
@@ -541,27 +615,29 @@ function makeQ4(profile: QuestionFormProfile): FrozenEvaluationCase {
         id: 'complete',
         type: 'Completing',
         completingItems: [
-          { id: 'item-a', semanticContent: 'Alpha', usageLimit: 1 },
-          { id: 'item-b', semanticContent: 'Beta', usageLimit: 1 },
+          { id: 'co2', semanticContent: 'carbon dioxide', usageLimit: 1 },
+          { id: 'o2', semanticContent: 'oxygen', usageLimit: 1 },
+          { id: 'n2', semanticContent: 'nitrogen', usageLimit: 1 },
         ],
-        completingGaps: ['gap-a', 'gap-b'].map((id) => ({
+        completingGaps: ['gap-1', 'gap-2'].map((id) => ({
           id,
           type: 'ItemGap' as const,
           workspaceStimulusRef: 'q4-text',
           sourceAnchor: {
             kind: 'TextAnchor' as const,
-            payload: { implementationLocator: `[${id}]` },
+            payload: { implementationLocator: `{{${id}}}` },
           },
-          correctItemRefs: [id === 'gap-a' ? 'item-a' : 'item-b'],
+          correctItemRefs: [id === 'gap-1' ? 'co2' : 'o2'],
         })),
       },
     ],
     [
       {
         id: 'q4-text',
-        sourceContent: referenceContentCarrier('[gap-a] then [gap-b]', {
-          text: true,
-        }),
+        sourceContent: referenceContentCarrier(
+          'During photosynthesis, plants take in {{gap-1}} and release {{gap-2}}.',
+          { text: true }
+        ),
         allowedModalities: ['Text'],
         materializationPolicy: 'Fixed',
       },
@@ -576,7 +652,16 @@ function makeQ4(profile: QuestionFormProfile): FrozenEvaluationCase {
     qfd: buildQfd(
       question,
       profile,
-      [completingRealization(mode)],
+      [
+        completingRealization(
+          mode,
+          'q4-sr',
+          ['gap-1', 'gap-2'],
+          ['co2', 'o2', 'n2'],
+          false,
+          false
+        ),
+      ],
       [stimulusRealization('q4-sr', 'q4-text', ['complete'], 'Text')]
     ),
     profile,
@@ -592,14 +677,18 @@ function makeQ5(profile: QuestionFormProfile): FrozenEvaluationCase {
       {
         id: 'short',
         type: 'ShortInput',
+        instruction: 'How many tones do you hear? Enter a whole number.',
         inputType: 'Integer',
-        correctValues: [42],
+        correctValues: [3],
+        minValue: 0,
+        maxValue: 10,
       },
     ],
     [
       {
         id: 'q5-audio',
-        sourceContent: 'audio://frozen-q5',
+        sourceContent:
+          'Synthetic audio containing exactly three clearly separated tones.',
         allowedModalities: ['Audio'],
         materializationPolicy: 'Fixed',
       },
@@ -632,16 +721,24 @@ function makeQ6(profile: QuestionFormProfile): FrozenEvaluationCase {
       {
         id: 'short',
         type: 'ShortInput',
-        inputType: 'Text',
-        correctValues: ['observation'],
-        caseSensitive: false,
+        instruction: 'How many moving objects are shown in the video?',
+        inputType: 'Integer',
+        correctValues: [1],
       },
-      { id: 'essay', type: 'Essay', minLength: 20, lengthUnit: 'Words' },
+      {
+        id: 'essay',
+        type: 'Essay',
+        instruction: 'In 20–50 words, describe the motion shown in the video.',
+        minLength: 20,
+        maxLength: 50,
+        lengthUnit: 'Words',
+      },
     ],
     [
       {
         id: 'q6-video',
-        sourceContent: 'video://frozen-q6',
+        sourceContent:
+          'Fixed video showing one ball moving continuously from left to right.',
         allowedModalities: ['Video'],
         materializationPolicy: 'Fixed',
       },
@@ -677,9 +774,12 @@ function makeQ7(profile: QuestionFormProfile): FrozenEvaluationCase {
     {
       id: 'artifact',
       type: 'ArtifactSubmission',
+      instruction:
+        'Produce one concept map showing the relationships among photosynthesis inputs, outputs, and energy flow.',
       minArtifacts: 1,
-      maxArtifacts: 2,
-      artifactSpecification: 'Submit the completed design artifact.',
+      maxArtifacts: 1,
+      artifactSpecification:
+        'One concept map showing photosynthesis inputs, outputs, and energy flow.',
     },
   ])
   return {
@@ -689,7 +789,7 @@ function makeQ7(profile: QuestionFormProfile): FrozenEvaluationCase {
       {
         type: 'ArtifactSubmissionRealization',
         interactionRef: 'artifact',
-        instructionRealizations: [],
+        instructionRealizations: [taskInstruction('artifact')],
         submissionMode:
           profile === INTERACTIVE_WEB_PROFILE
             ? 'DigitalSubmission'
@@ -718,6 +818,9 @@ function makeQ8(
       {
         id: 'mark',
         type: 'Marking',
+        instruction: image
+          ? 'Place one point inside the circle.'
+          : 'Mark the verb phrase in the sentence.',
         markType: image ? 'Point' : 'TextSpan',
         minMarks: 1,
         maxMarks: 1,
@@ -727,8 +830,14 @@ function makeQ8(
       {
         id: 'q8-workspace',
         sourceContent: image
-          ? referenceContentCarrier('/frozen/q8.png', { region: true })
-          : referenceContentCarrier('Frozen text passage.', { text: true }),
+          ? referenceContentCarrier(
+              'Frozen image containing a triangle, circle, and square.',
+              { region: true }
+            )
+          : referenceContentCarrier(
+              'The enzyme catalyzes the reaction rapidly.',
+              { text: true }
+            ),
         allowedModalities: [image ? 'Image' : 'Text'],
         materializationPolicy: 'Fixed',
       },
@@ -745,7 +854,7 @@ function makeQ8(
         {
           type: 'MarkingRealization',
           interactionRef: 'mark',
-          instructionRealizations: [],
+          instructionRealizations: [taskInstruction('mark')],
           workspaceRealizationRef: 'q8-sr',
         },
       ],
@@ -771,23 +880,25 @@ function makeQ9(profile: QuestionFormProfile): FrozenEvaluationCase {
       {
         id: 'select',
         type: 'Selecting',
+        instruction: 'Select the circle.',
         minSelections: 1,
         maxSelections: 1,
-        choices: ['left', 'right'].map((id, index) => ({
+        choices: ['triangle', 'circle', 'square'].map((id) => ({
           id,
-          semanticContent: id,
-          isCorrect: index === 0,
+          semanticContent: id[0].toUpperCase() + id.slice(1),
+          isCorrect: id === 'circle',
           workspaceStimulusRef: 'q9-image',
-          placementSpecification: `${id} region`,
+          placementSpecification: `The ${id} region in the frozen image.`,
         })),
       },
     ],
     [
       {
         id: 'q9-image',
-        sourceContent: referenceContentCarrier('/frozen/q9.png', {
-          region: true,
-        }),
+        sourceContent: referenceContentCarrier(
+          'Frozen image containing a triangle, circle, and square.',
+          { region: true }
+        ),
         allowedModalities: ['Image'],
         materializationPolicy: 'Fixed',
       },
@@ -802,18 +913,20 @@ function makeQ9(profile: QuestionFormProfile): FrozenEvaluationCase {
       {
         type: 'SelectingRealization',
         interactionRef: 'select',
-        instructionRealizations: [],
+        instructionRealizations: [taskInstruction('select')],
         workspaceRealizations: [
           {
             stimulusRealizationRef: 'q9-sr',
             mode: referenced ? 'ReferencedSelection' : 'DirectSelection',
-            choiceRealizations: ['left', 'right'].map((choiceRef) => ({
-              choiceRef,
-              realizationAnchor: {
-                kind: 'RegionRealizationAnchor' as const,
-                payload: { implementationLocator: choiceRef },
-              },
-            })),
+            choiceRealizations: ['triangle', 'circle', 'square'].map(
+              (choiceRef) => ({
+                choiceRef,
+                realizationAnchor: {
+                  kind: 'RegionRealizationAnchor' as const,
+                  payload: { implementationLocator: choiceRef },
+                },
+              })
+            ),
             ...(referenced
               ? { referencedResponseSite: { id: 'q9-reference-site' } }
               : {}),
@@ -847,16 +960,37 @@ function makeQ10(profile: QuestionFormProfile): FrozenEvaluationCase {
       {
         id: 'complete',
         type: 'Completing',
+        instruction:
+          'Complete the diagram by placing the four chamber labels in the correct positions.',
         completingItems: [
-          { id: 'item-a', semanticContent: 'Atrium' },
-          { id: 'item-b', semanticContent: 'Ventricle' },
+          { id: 'left-atrium', semanticContent: 'Left atrium', usageLimit: 1 },
+          {
+            id: 'right-atrium',
+            semanticContent: 'Right atrium',
+            usageLimit: 1,
+          },
+          {
+            id: 'left-ventricle',
+            semanticContent: 'Left ventricle',
+            usageLimit: 1,
+          },
+          {
+            id: 'right-ventricle',
+            semanticContent: 'Right ventricle',
+            usageLimit: 1,
+          },
         ],
-        completingGaps: ['gap-a', 'gap-b'].map((id) => ({
-          id,
+        completingGaps: [
+          'left-atrium',
+          'right-atrium',
+          'left-ventricle',
+          'right-ventricle',
+        ].map((chamber) => ({
+          id: `gap-${chamber}`,
           type: 'ItemGap' as const,
           workspaceStimulusRef: 'q10-spec',
-          placementSpecification: `${id} anatomical region`,
-          correctItemRefs: [id === 'gap-a' ? 'item-a' : 'item-b'],
+          placementSpecification: `The ${chamber} region in the heart diagram.`,
+          correctItemRefs: [chamber],
         })),
       },
     ],
@@ -865,7 +999,8 @@ function makeQ10(profile: QuestionFormProfile): FrozenEvaluationCase {
         id: 'q10-spec',
         allowedModalities: ['Image'],
         materializationPolicy: 'SpecificationBased',
-        contentSpecification: 'A labelled heart diagram without answers.',
+        contentSpecification:
+          'A clear schematic human-heart diagram with four visually distinct chambers and no answer labels.',
       },
     ],
     [{ interactionRef: 'complete', stimulusRef: 'q10-spec', role: 'Workspace' }]
@@ -878,7 +1013,20 @@ function makeQ10(profile: QuestionFormProfile): FrozenEvaluationCase {
     qfd: buildQfd(
       question,
       profile,
-      [completingRealization(mode, 'q10-sr', ['gap-a', 'gap-b'], true)],
+      [
+        completingRealization(
+          mode,
+          'q10-sr',
+          [
+            'gap-left-atrium',
+            'gap-right-atrium',
+            'gap-left-ventricle',
+            'gap-right-ventricle',
+          ],
+          ['left-atrium', 'right-atrium', 'left-ventricle', 'right-ventricle'],
+          true
+        ),
+      ],
       [
         stimulusRealization(
           'q10-sr',
@@ -886,7 +1034,10 @@ function makeQ10(profile: QuestionFormProfile): FrozenEvaluationCase {
           ['complete'],
           'Image',
           'MaterializeFromSpecification',
-          referenceContentCarrier('/frozen/q10.png', { region: true })
+          referenceContentCarrier(
+            'Versioned concrete schematic human-heart image with four visually distinct chambers.',
+            { region: true }
+          )
         ),
       ]
     ),
@@ -902,20 +1053,22 @@ function makeQ11(profile: QuestionFormProfile): FrozenEvaluationCase {
       {
         id: 'short',
         type: 'ShortInput',
-        inputType: 'Text',
-        correctValues: ['adapted'],
-        caseSensitive: false,
+        instruction: 'What value does the chart show for 2020?',
+        inputType: 'Number',
+        correctValues: [60],
       },
     ],
     [
       {
         id: 'q11-image',
-        sourceContent: referenceContentCarrier('/frozen/q11-source.png', {
-          region: true,
-        }),
+        sourceContent: referenceContentCarrier(
+          'Source bar chart: 2019 → 40; 2020 → 60; 2021 → 50, with scale and axes.',
+          { region: true }
+        ),
         allowedModalities: ['Image'],
         materializationPolicy: 'Adaptable',
-        contentSpecification: 'Preserve the response-relevant image meaning.',
+        contentSpecification:
+          'Preserve the years 2019/2020/2021, values 40/60/50, their year-value mapping, and sufficient scale/axis information.',
       },
     ],
     [{ interactionRef: 'short', stimulusRef: 'q11-image', role: 'Context' }]
@@ -934,7 +1087,10 @@ function makeQ11(profile: QuestionFormProfile): FrozenEvaluationCase {
           ['short'],
           'Image',
           'AdaptContent',
-          referenceContentCarrier('/frozen/q11-adapted.png', { region: true })
+          referenceContentCarrier(
+            'Versioned adapted bar chart preserving 2019 → 40; 2020 → 60; 2021 → 50 with sufficient scale and axes.',
+            { region: true }
+          )
         ),
       ]
     ),
@@ -968,21 +1124,28 @@ function makeQ12(
       {
         id: 'i1',
         type: 'ShortInput',
+        instruction: 'What is 2 + 3?',
         inputType: 'Integer',
-        correctValues: [1],
+        correctValues: [5],
       },
       {
         id: 'i2',
         type: 'Selecting',
+        instruction: 'Select the even number.',
         minSelections: 1,
         maxSelections: 1,
         standaloneChoiceOrderPolicy: 'Permutable',
         choices: [
-          { id: 'yes', semanticContent: 'Yes', isCorrect: true },
-          { id: 'no', semanticContent: 'No', isCorrect: false },
+          { id: '3', semanticContent: '3', isCorrect: false },
+          { id: '4', semanticContent: '4', isCorrect: true },
+          { id: '5', semanticContent: '5', isCorrect: false },
         ],
       },
-      { id: 'i3', type: 'Essay', minLength: 10, lengthUnit: 'Words' },
+      {
+        id: 'i3',
+        type: 'Essay',
+        instruction: 'Briefly explain how you identified the even number.',
+      },
     ],
     [],
     [],
@@ -1001,7 +1164,7 @@ function makeQ12(
     qfd: buildQfd(
       question,
       profile,
-      [scalar('i1'), selecting('i2', ['yes', 'no'], 'Expanded'), essay('i3')],
+      [scalar('i1'), selecting('i2', ['3', '4', '5'], 'Expanded'), essay('i3')],
       [],
       [{ beforeInteractionRef: 'i2', afterInteractionRef: 'i3' }],
       realizeDependency ? [qfdDependency] : []
@@ -1035,6 +1198,7 @@ function makeB12(negative: boolean): FrozenEvaluationCase {
       {
         id: 'a',
         type: 'Selecting',
+        instruction: 'Answer interaction A using the shared context.',
         minSelections: 1,
         maxSelections: 1,
         standaloneChoiceOrderPolicy: 'Permutable',
@@ -1046,6 +1210,7 @@ function makeB12(negative: boolean): FrozenEvaluationCase {
       {
         id: 'b',
         type: 'Selecting',
+        instruction: 'Answer interaction B using the shared context.',
         minSelections: 1,
         maxSelections: 1,
         standaloneChoiceOrderPolicy: 'Permutable',
@@ -1144,15 +1309,17 @@ const q12Web = makeQ12(INTERACTIVE_WEB_PROFILE)
 
 const b01Qd = clone(q1Web.qd)
 const b01Selecting = b01Qd.responseInteractions[0]
-if (b01Selecting?.type === 'Selecting') b01Selecting.choices[1].isCorrect = true
+if (b01Selecting?.type === 'Selecting') {
+  b01Selecting.minSelections = 1
+  b01Selecting.maxSelections = 1
+}
 
 const b02Qd = clone(q12Web.qd)
-b02Qd.responseInteractions[0] = {
-  id: 'i1',
-  type: 'Essay',
-  minLength: 1,
-  lengthUnit: 'Words',
-}
+const b02Dependency = b02Qd.constraints.find(
+  (constraint): constraint is DependencyConstraint =>
+    constraint.type === 'Dependency'
+)
+if (b02Dependency) b02Dependency.predecessorInteractionRef = 'i3'
 
 const b03Qfd = clone(q1Web.qfd)
 b03Qfd.interactionRealizations.push(clone(q1Web.qfd.interactionRealizations[0]))
@@ -1161,16 +1328,14 @@ const b04Qd = clone(q6Web.qd)
 b04Qd.associations = b04Qd.associations.filter(
   ({ interactionRef }) => interactionRef === 'short'
 )
-const b04Qfd = buildQfd(
-  b04Qd,
-  INTERACTIVE_WEB_PROFILE,
-  [scalar('short'), essay('essay')],
-  [stimulusRealization('b04-sr', 'q6-video', ['short', 'essay'], 'Video')],
-  [{ beforeInteractionRef: 'short', afterInteractionRef: 'essay' }]
-)
+const b04Qfd = clone(q6Web.qfd)
 
 const b05Qfd = buildQfd(q2Paper.qd, CONVENTIONAL_PAPER_PROFILE, [
-  ordering('order', ['first', 'second', 'third'], 'DirectOrdering'),
+  ordering(
+    'order',
+    ['metaphase', 'telophase', 'prophase', 'anaphase'],
+    'DirectOrdering'
+  ),
 ])
 
 const b06Qfd = clone(q5Web.qfd)
@@ -1184,15 +1349,9 @@ if (b09Relating?.type === 'RelatingRealization') {
 }
 
 const b10Qd = clone(q1Web.qd)
-b10Qd.responseInteractions[0].instruction = 'Select the single correct option.'
-const b10Realization = selecting('select', ['a', 'b'], 'Collapsed')
-b10Realization.instructionRealizations = [
-  {
-    id: 'b10-task',
-    role: 'TaskInstruction',
-    realizedText: 'Choose the option that seems most suitable.',
-  },
-]
+const b10Realization = selecting('select', ['he', 'o', 'ne', 'n'], 'Collapsed')
+b10Realization.instructionRealizations[0].realizedText =
+  'Choose two options that best fit the requested scientific category.'
 const b10Qfd = buildQfd(b10Qd, INTERACTIVE_WEB_PROFILE, [b10Realization])
 
 const b11Qfd = clone(q3Web.qfd)
