@@ -6,6 +6,7 @@ import {
   qfdTestQd,
 } from '../fixtures/qfdFixtures'
 import { INTERACTIVE_WEB_PROFILE_RECORD } from '../profiles/registry'
+import type { QuestionFormProfile } from '../profiles/model'
 import { evaluateProfileFeasibility } from './evaluateProfileFeasibility'
 
 function profileWithout(...capabilities: typeof qfdTestProfile.capabilities) {
@@ -116,5 +117,121 @@ describe('profile feasibility on the stabilized QFD/profile model', () => {
       evaluateProfileFeasibility(qfdTestQd, buildValidQfd(), record.profile)
         .aggregate
     ).toBe('INFEASIBLE')
+  })
+})
+
+describe('mandatory QD capability derivation', () => {
+  it('accepts a QD Sequence with concrete precedence on a supporting profile', () => {
+    const qd = structuredClone(qfdTestQd)
+    qd.constraints = [
+      { type: 'Sequence', interactionRefs: ['selecting', 'ordering'] },
+    ]
+    expect(
+      evaluateProfileFeasibility(qd, buildValidQfd(), qfdTestProfile).aggregate
+    ).toBe('FEASIBLE')
+  })
+
+  it('rejects an unsupported QD Sequence even when QFD omits precedence', () => {
+    const qd = structuredClone(qfdTestQd)
+    qd.constraints = [
+      { type: 'Sequence', interactionRefs: ['selecting', 'ordering'] },
+    ]
+    const qfd = buildValidQfd()
+    qfd.interactionPrecedences = []
+    expect(
+      evaluateProfileFeasibility(
+        qd,
+        qfd,
+        profileWithout('LogicalInteractionPrecedence')
+      ).aggregate
+    ).toBe('INFEASIBLE')
+  })
+
+  it('allows QD Sequence feasibility when profile supports precedence despite QFD omission', () => {
+    const qd = structuredClone(qfdTestQd)
+    qd.constraints = [
+      { type: 'Sequence', interactionRefs: ['selecting', 'ordering'] },
+    ]
+    const qfd = buildValidQfd()
+    qfd.interactionPrecedences = []
+    expect(evaluateProfileFeasibility(qd, qfd, qfdTestProfile).aggregate).toBe(
+      'FEASIBLE'
+    )
+  })
+
+  it('does not require precedence capability without QD Sequence or QFD precedence', () => {
+    const qfd = buildValidQfd()
+    qfd.interactionPrecedences = []
+    expect(
+      evaluateProfileFeasibility(
+        qfdTestQd,
+        qfd,
+        profileWithout('LogicalInteractionPrecedence')
+      ).aggregate
+    ).toBe('FEASIBLE')
+  })
+
+  it('rejects unsupported concrete QFD precedence without a QD Sequence', () => {
+    expect(
+      evaluateProfileFeasibility(
+        qfdTestQd,
+        buildValidQfd(),
+        profileWithout('LogicalInteractionPrecedence')
+      ).aggregate
+    ).toBe('INFEASIBLE')
+  })
+
+  it('requires TextualPresentation for a QD instruction omitted by QFD', () => {
+    const qd = {
+      id: 'qd-instruction',
+      responseInteractions: [
+        {
+          id: 'short',
+          type: 'ShortInput' as const,
+          instruction: 'Enter the result.',
+          inputType: 'Integer' as const,
+          correctValues: [2],
+        },
+      ],
+      stimuli: [],
+      associations: [],
+      constraints: [],
+    }
+    const qfd = {
+      questionDefinitionRef: qd.id,
+      targetProfileRef: 'profile-instruction',
+      stimulusRealizations: [],
+      interactionRealizations: [
+        {
+          type: 'ShortInputRealization' as const,
+          interactionRef: 'short',
+          instructionRealizations: [],
+          responseSite: { id: 'short-site' },
+        },
+      ],
+      interactionPrecedences: [],
+      dependencyRealizations: [],
+      rootLayout: {
+        kind: 'LayoutGroup' as const,
+        orientation: 'Vertical' as const,
+        children: [
+          {
+            kind: 'LayoutPlacement' as const,
+            realizationRef: {
+              kind: 'ResponseSiteRealization' as const,
+              id: 'short-site',
+            },
+          },
+        ],
+      },
+    }
+    const profile: QuestionFormProfile = {
+      id: 'profile-instruction',
+      supportedStimulusModalities: [],
+      capabilities: ['ScalarResponse', 'VerticalComposition'],
+    }
+    expect(evaluateProfileFeasibility(qd, qfd, profile).aggregate).toBe(
+      'INFEASIBLE'
+    )
   })
 })

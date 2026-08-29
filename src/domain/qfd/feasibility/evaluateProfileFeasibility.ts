@@ -46,13 +46,10 @@ export function evaluateProfileFeasibility(
 
   const concreteCapabilities = deriveConcreteCapabilities(qd, qfd)
   const normalizedDependencies = normalizeQdDependencies(qd)
-  const mandatoryCapabilities = new Set<QFDCapability>()
-  for (const dependency of normalizedDependencies.values()) {
-    if (dependency.strength !== 'Required') continue
-    dependencyCapabilities(dependency).forEach((capability) =>
-      mandatoryCapabilities.add(capability)
-    )
-  }
+  const mandatoryCapabilities = deriveMandatoryQdCapabilities(
+    qd,
+    normalizedDependencies
+  )
   const requiredCapabilities = new Set([
     ...concreteCapabilities,
     ...mandatoryCapabilities,
@@ -96,6 +93,28 @@ export function evaluateProfileFeasibility(
   }
 
   return { findings, aggregate: aggregateFeasibility(findings) }
+}
+
+function deriveMandatoryQdCapabilities(
+  qd: QuestionDefinition,
+  normalizedDependencies: Map<string, DependencyConstraint>
+): Set<QFDCapability> {
+  const capabilities = new Set<QFDCapability>()
+  if (qd.constraints.some(({ type }) => type === 'Sequence'))
+    capabilities.add('LogicalInteractionPrecedence')
+  if (
+    qd.responseInteractions.some(({ instruction }) =>
+      Boolean(instruction?.trim())
+    )
+  )
+    capabilities.add('TextualPresentation')
+  for (const dependency of normalizedDependencies.values()) {
+    if (dependency.strength !== 'Required') continue
+    dependencyCapabilities(dependency).forEach((capability) =>
+      capabilities.add(capability)
+    )
+  }
+  return capabilities
 }
 
 export function deriveConcreteCapabilities(
