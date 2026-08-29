@@ -88,12 +88,17 @@ function semanticContentFinding(
   realization: StimulusRealization,
   evidence: ConformanceEvidence
 ): Finding {
-  const trusted = evidence.preservedStimulusRealizationIds?.has(realization.id)
-  const directReuse =
+  const trustedPreservation = evidence.preservedStimulusRealizationIds?.has(
+    realization.id
+  )
+  const provenSourceReuse =
     realization.mode === 'PreserveContent' &&
-    (realization.realizedContent === undefined ||
-      contentEqual(realization.realizedContent, stimulus.sourceContent))
-  if (directReuse || trusted)
+    evidence.directSourceReuseStimulusRealizationIds?.has(realization.id)
+  const exactRealizedContent =
+    realization.mode === 'PreserveContent' &&
+    realization.realizedContent !== undefined &&
+    contentEqual(realization.realizedContent, stimulus.sourceContent)
+  if (exactRealizedContent || provenSourceReuse || trustedPreservation)
     return pass(
       'CONF-STM-SEM-001',
       `Semantic preservation for '${realization.id}' is deterministically established.`,

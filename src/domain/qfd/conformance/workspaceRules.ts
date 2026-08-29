@@ -204,12 +204,14 @@ function locationFinding(
   evidence: ConformanceEvidence
 ): Finding {
   const key = workspaceBindingKey(interactionId, elementId)
-  const directSourceReuse = Boolean(
+  const applicableSourceAnchor = Boolean(
     qdPlacement.sourceAnchor &&
-    sr?.mode === 'PreserveContent' &&
+    sr &&
+    sr.mode === 'PreserveContent' &&
+    evidence.directSourceReuseStimulusRealizationIds?.has(sr.id) &&
     realizationAnchor === undefined
   )
-  if (directSourceReuse || evidence.trustedWorkspaceBindingKeys?.has(key))
+  if (applicableSourceAnchor || evidence.trustedWorkspaceBindingKeys?.has(key))
     return pass(
       'CONF-WRK-LOC-001',
       `Workspace location for '${elementId}' is deterministically preserved.`

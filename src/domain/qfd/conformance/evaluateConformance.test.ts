@@ -3,6 +3,7 @@ import type { DependencyConstraint, QuestionDefinition } from '../../qd/model'
 import { buildValidQfd, qfdTestQd } from '../fixtures/qfdFixtures'
 import type { QuestionFormDefinition } from '../model'
 import type { ConformanceEvidence } from './evidence'
+import { workspaceBindingKey } from './evidence'
 import { evaluateConformance } from './evaluateConformance'
 
 function fixture(): {
@@ -33,8 +34,26 @@ function fixture(): {
   return {
     qd,
     qfd,
-    evidence: { trustedArtifactInteractionRefs: new Set(['artifact']) },
+    evidence: {
+      directSourceReuseStimulusRealizationIds: new Set([
+        'sr-select',
+        'sr-complete',
+        'sr-mark',
+      ]),
+      trustedArtifactInteractionRefs: new Set(['artifact']),
+    },
   }
+}
+
+function removeSourceReuseEvidence(
+  evidence: ConformanceEvidence,
+  stimulusRealizationId: string
+): void {
+  evidence.directSourceReuseStimulusRealizationIds = new Set(
+    [...(evidence.directSourceReuseStimulusRealizationIds ?? [])].filter(
+      (id) => id !== stimulusRealizationId
+    )
+  )
 }
 
 function expectFinding(
@@ -240,5 +259,80 @@ describe('QD-QFD conformance', () => {
     const result = evaluateConformance(qd, qfd, evidence)
     expectFinding(result, 'CONF-CTX-001', 'PASS')
     expect(result.aggregate).toBe('CONFORMANT')
+  })
+})
+
+describe('PreserveContent proof boundaries', () => {
+  it('passes proven direct same-representation source reuse', () => {
+    const { qd, qfd, evidence } = fixture()
+    const result = evaluateConformance(qd, qfd, evidence)
+    expectFinding(result, 'CONF-STM-SEM-001', 'PASS')
+    expectFinding(result, 'CONF-WRK-LOC-001', 'PASS')
+    expect(result.aggregate).toBe('CONFORMANT')
+  })
+
+  it('does not reuse a TextAnchor automatically for cross-modal PreserveContent', () => {
+    const { qd, qfd, evidence } = fixture()
+    qd.stimuli[0].allowedModalities.push('Audio')
+    qfd.stimulusRealizations[0].realizedModality = 'Audio'
+    removeSourceReuseEvidence(evidence, 'sr-select')
+    const result = evaluateConformance(qd, qfd, evidence)
+    expectFinding(result, 'CONF-STM-MOD-001', 'PASS')
+    expectFinding(result, 'CONF-STM-SEM-001', 'REVIEW_REQUIRED')
+    expectFinding(result, 'CONF-WRK-LOC-001', 'FAIL')
+    expect(result.aggregate).toBe('NON_CONFORMANT')
+  })
+
+  it('requires review for opaque but structurally complete location mappings', () => {
+    const { qd, qfd, evidence } = fixture()
+    removeSourceReuseEvidence(evidence, 'sr-select')
+    evidence.preservedStimulusRealizationIds = new Set(['sr-select'])
+    const selecting = qfd.interactionRealizations.find(
+      (realization) => realization.type === 'SelectingRealization'
+    )!
+    selecting.workspaceRealizations[0].choiceRealizations.forEach((choice) => {
+      choice.realizationAnchor = {
+        kind: 'TextRealizationAnchor',
+        payload: { implementationLocator: 'opaque' },
+      }
+    })
+    const result = evaluateConformance(qd, qfd, evidence)
+    expectFinding(result, 'CONF-WRK-LOC-001', 'REVIEW_REQUIRED')
+    expect(result.aggregate).toBe('REVIEW_REQUIRED')
+  })
+
+  it('passes narrowly scoped trusted deterministic Workspace evidence', () => {
+    const { qd, qfd, evidence } = fixture()
+    removeSourceReuseEvidence(evidence, 'sr-select')
+    evidence.preservedStimulusRealizationIds = new Set(['sr-select'])
+    evidence.trustedWorkspaceBindingKeys = new Set([
+      workspaceBindingKey('selecting', 'workspace-choice'),
+      workspaceBindingKey('selecting', 'workspace-choice-2'),
+    ])
+    const result = evaluateConformance(qd, qfd, evidence)
+    expectFinding(result, 'CONF-WRK-LOC-001', 'PASS')
+    expect(result.aggregate).toBe('CONFORMANT')
+  })
+
+  it('fails when a required concrete Workspace location is absent', () => {
+    const { qd, qfd, evidence } = fixture()
+    removeSourceReuseEvidence(evidence, 'sr-select')
+    evidence.preservedStimulusRealizationIds = new Set(['sr-select'])
+    const result = evaluateConformance(qd, qfd, evidence)
+    expectFinding(result, 'CONF-WRK-LOC-001', 'FAIL')
+    expect(result.aggregate).toBe('NON_CONFORMANT')
+  })
+
+  it('does not infer semantic preservation from absent realizedContent', () => {
+    const { qd, qfd, evidence } = fixture()
+    removeSourceReuseEvidence(evidence, 'sr-select')
+    evidence.trustedWorkspaceBindingKeys = new Set([
+      workspaceBindingKey('selecting', 'workspace-choice'),
+      workspaceBindingKey('selecting', 'workspace-choice-2'),
+    ])
+    expect(qfd.stimulusRealizations[0].realizedContent).toBeUndefined()
+    const result = evaluateConformance(qd, qfd, evidence)
+    expectFinding(result, 'CONF-STM-SEM-001', 'REVIEW_REQUIRED')
+    expect(result.aggregate).toBe('REVIEW_REQUIRED')
   })
 })
