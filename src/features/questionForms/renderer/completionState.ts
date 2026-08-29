@@ -1,5 +1,3 @@
-import type { CompletingItemUsageLimit } from '@/domain/qd/model'
-
 /** Gap id → assigned completing-item id (undefined when empty). */
 export type CompletionAssignments = Record<string, string | undefined>
 
@@ -10,11 +8,11 @@ export function assignCompletionItem(
   current: CompletionAssignments,
   gapId: string,
   itemId: string,
-  usageLimit: CompletingItemUsageLimit
+  usageLimit: number | undefined
 ): CompletionAssignments {
   if (current[gapId] === itemId) return current
   const next = { ...current }
-  if (usageLimit !== 'Unlimited') {
+  if (usageLimit !== undefined) {
     const occupied = Object.keys(next).filter(
       (g) => g !== gapId && next[g] === itemId
     )

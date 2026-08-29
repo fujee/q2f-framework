@@ -5,7 +5,6 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import type { CompletingItemUsageLimit } from '@/domain/qd/model'
 import {
   assignCompletionItem,
   removeCompletionItem,
@@ -19,7 +18,7 @@ interface CompletionContextValue {
   assignItem: (
     gapId: string,
     itemId: string,
-    usageLimit: CompletingItemUsageLimit
+    usageLimit: number | undefined
   ) => void
   removeItem: (gapId: string) => void
 }

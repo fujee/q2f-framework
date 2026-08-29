@@ -5,7 +5,30 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { containRect, type ContainRect } from '../lib/imageRegionGeometry'
+
+export interface ContainRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+function containRect(
+  boxWidth: number,
+  boxHeight: number,
+  imageWidth: number,
+  imageHeight: number
+): ContainRect {
+  const scale = Math.min(boxWidth / imageWidth, boxHeight / imageHeight)
+  const width = imageWidth * scale
+  const height = imageHeight * scale
+  return {
+    left: (boxWidth - width) / 2,
+    top: (boxHeight - height) / 2,
+    width,
+    height,
+  }
+}
 
 export interface ImageRegion {
   key: string
