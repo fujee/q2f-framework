@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="460" viewBox="0 0 720 460" role="img" aria-label="Bar chart: 2019 is 40, 2020 is 60, 2021 is 50">
+  <rect width="720" height="460" fill="#fff"/>
+  <g stroke="#617069" stroke-width="1"><path d="M90 360H670M90 310H670M90 260H670M90 210H670M90 160H670M90 110H670M90 60H670"/></g>
+  <path d="M90 40V360H680" fill="none" stroke="#17211d" stroke-width="4"/>
+  <g font-family="sans-serif" font-size="18" fill="#17211d"><text x="58" y="366">0</text><text x="48" y="316">10</text><text x="48" y="266">20</text><text x="48" y="216">30</text><text x="48" y="166">40</text><text x="48" y="116">50</text><text x="48" y="66">60</text></g>
+  <rect x="150" y="160" width="110" height="200" fill="#4c9b78"/><rect x="330" y="60" width="110" height="300" fill="#e5ad42"/><rect x="510" y="110" width="110" height="250" fill="#5689c7"/>
+  <g font-family="sans-serif" font-size="21" text-anchor="middle" fill="#17211d"><text x="205" y="400">2019</text><text x="385" y="400">2020</text><text x="565" y="400">2021</text><text x="205" y="150">40</text><text x="385" y="50">60</text><text x="565" y="100">50</text></g>
+</svg>

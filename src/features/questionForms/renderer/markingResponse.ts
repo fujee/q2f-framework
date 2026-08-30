@@ -12,9 +12,18 @@ export interface RendererTextSpanMark {
   selectedText: string
 }
 
+/** Renderer-local pixel offsets; deliberately not normalized or universal. */
+export interface RendererRegionMark {
+  kind: 'Region'
+  startOffsetX: number
+  startOffsetY: number
+  endOffsetX: number
+  endOffsetY: number
+}
+
 export interface RendererMarkingResponse {
   workspaceRealizationRef: string
-  marks: Array<RendererPointMark | RendererTextSpanMark>
+  marks: Array<RendererPointMark | RendererRegionMark | RendererTextSpanMark>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -41,6 +50,23 @@ function isTextSpanMark(value: unknown): value is RendererTextSpanMark {
   )
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isRegionMark(value: unknown): value is RendererRegionMark {
+  return (
+    isRecord(value) &&
+    value.kind === 'Region' &&
+    isFiniteNumber(value.startOffsetX) &&
+    isFiniteNumber(value.startOffsetY) &&
+    isFiniteNumber(value.endOffsetX) &&
+    isFiniteNumber(value.endOffsetY) &&
+    value.startOffsetX !== value.endOffsetX &&
+    value.startOffsetY !== value.endOffsetY
+  )
+}
+
 /** Strictly accepts this renderer's local payload for the exact QFD workspace. */
 export function acceptsRendererMarkingResponse(
   interaction: Marking,
@@ -56,10 +82,11 @@ export function acceptsRendererMarkingResponse(
       raw.marks.length > interaction.maxMarks)
   )
     return false
-  if (interaction.markType === 'Region') return false
-  return raw.marks.every((mark) =>
-    interaction.markType === 'Point' ? isPointMark(mark) : isTextSpanMark(mark)
-  )
+  return raw.marks.every((mark) => {
+    if (interaction.markType === 'Point') return isPointMark(mark)
+    if (interaction.markType === 'Region') return isRegionMark(mark)
+    return isTextSpanMark(mark)
+  })
 }
 
 export function appendPointMark(
@@ -91,6 +118,31 @@ export function appendTextSpanMark(
         ? previous.marks
         : []),
       { kind: 'TextSpan', selectedText },
+    ],
+  }
+}
+
+export function appendRegionMark(
+  previous: RendererMarkingResponse | undefined,
+  workspaceRealizationRef: string,
+  startOffsetX: number,
+  startOffsetY: number,
+  endOffsetX: number,
+  endOffsetY: number
+): RendererMarkingResponse {
+  return {
+    workspaceRealizationRef,
+    marks: [
+      ...(previous?.workspaceRealizationRef === workspaceRealizationRef
+        ? previous.marks
+        : []),
+      {
+        kind: 'Region',
+        startOffsetX,
+        startOffsetY,
+        endOffsetX,
+        endOffsetY,
+      },
     ],
   }
 }

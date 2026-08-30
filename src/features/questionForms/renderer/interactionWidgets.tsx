@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useRef,
   useState,
   type MouseEvent,
   type ReactNode,
@@ -18,6 +19,7 @@ import type {
 import { LayoutTree } from './LayoutTree'
 import {
   appendPointMark,
+  appendRegionMark,
   appendTextSpanMark,
   type RendererMarkingResponse,
 } from './markingResponse'
@@ -129,7 +131,16 @@ export function StimulusContent({
     case 'Audio':
       return <audio controls src={content} />
     case 'Video':
-      return <video controls src={content} />
+      return content.endsWith('.svg') ? (
+        <img
+          src={content}
+          alt="Temporal visual stimulus"
+          data-renderer-video-carrier="animated-svg"
+          className="max-h-full max-w-full object-contain"
+        />
+      ) : (
+        <video controls src={content} />
+      )
   }
 }
 
@@ -1086,6 +1097,7 @@ function WorkspaceMarkingSurface({
   const [responses, setResponses] = useState<
     Record<string, RendererMarkingResponse | undefined>
   >({})
+  const regionStart = useRef<{ offsetX: number; offsetY: number } | null>(null)
   const entries = interactionRefs.flatMap((interactionRef) => {
     const interaction = ctx.interactions.get(interactionRef)
     const qfdRealization = ctx.interactionRealizations.get(interactionRef)
@@ -1136,36 +1148,64 @@ function WorkspaceMarkingSurface({
         report(interaction.id, next)
     })
   }
+  const beginRegion = (event: MouseEvent<HTMLDivElement>) => {
+    if (!entries.some(({ interaction }) => interaction.markType === 'Region'))
+      return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    regionStart.current = {
+      offsetX: event.clientX - bounds.left,
+      offsetY: event.clientY - bounds.top,
+    }
+  }
+  const finishMark = (event: MouseEvent<HTMLDivElement>) => {
+    const start = regionStart.current
+    regionStart.current = null
+    if (start) {
+      const bounds = event.currentTarget.getBoundingClientRect()
+      entries.forEach(({ interaction, realization: marking }) => {
+        if (interaction.markType !== 'Region' || disabled(interaction.id))
+          return
+        const next = appendRegionMark(
+          responses[interaction.id],
+          marking.workspaceRealizationRef,
+          start.offsetX,
+          start.offsetY,
+          event.clientX - bounds.left,
+          event.clientY - bounds.top
+        )
+        if (
+          interaction.maxMarks === undefined ||
+          next.marks.length <= interaction.maxMarks
+        )
+          report(interaction.id, next)
+      })
+      return
+    }
+    textSpan()
+  }
   return (
     <div
       data-renderer-marking-surface="true"
       data-workspace-realization-ref={realization.id}
       onClick={point}
-      onMouseUp={textSpan}
+      onMouseDown={beginRegion}
+      onMouseUp={finishMark}
     >
       <StimulusContent ctx={ctx} realization={realization} />
-      {entries.map(({ interaction }) =>
-        interaction.markType === 'Region' ? (
-          <div
-            className="qfd-marking-unsupported"
-            data-owner-interaction={interaction.id}
-            key={interaction.id}
-          >
-            Region marking is not supported by this reference renderer.
-          </div>
-        ) : (
-          <div
-            className="qfd-marking-guidance"
-            data-owner-interaction={interaction.id}
-            data-mark-type={interaction.markType}
-            key={interaction.id}
-          >
-            {interaction.markType === 'Point'
-              ? 'Click the workspace to place a point.'
+      {entries.map(({ interaction }) => (
+        <div
+          className="qfd-marking-guidance"
+          data-owner-interaction={interaction.id}
+          data-mark-type={interaction.markType}
+          key={interaction.id}
+        >
+          {interaction.markType === 'Point'
+            ? 'Click the workspace to place a point.'
+            : interaction.markType === 'Region'
+              ? 'Drag across the workspace to mark a renderer-local region.'
               : 'Select text in the workspace to add a span.'}
-          </div>
-        )
-      )}
+        </div>
+      ))}
     </div>
   )
 }

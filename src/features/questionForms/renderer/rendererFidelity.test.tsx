@@ -8,6 +8,7 @@ import { buildHtmlFragment } from './htmlFragment'
 import {
   acceptsRendererMarkingResponse,
   appendPointMark,
+  appendRegionMark,
   appendTextSpanMark,
 } from './markingResponse'
 import { moveOrderingItem } from './orderingResponse'
@@ -426,7 +427,7 @@ describe('concrete QFD renderer fidelity', () => {
     ).toEqual(valid)
   })
 
-  it('accepts non-empty TextSpan payloads and explicitly rejects unsupported Region payloads', () => {
+  it('accepts non-empty TextSpan and renderer-local Region payloads for the exact workspace', () => {
     const frozen = primary('Q8B-InteractiveWebProfile')
     const interaction = frozen.qd.responseInteractions[0]
     const realization = frozen.qfd.interactionRealizations[0]
@@ -448,15 +449,35 @@ describe('concrete QFD renderer fidelity', () => {
     expect(
       acceptsRendererMarkingResponse(interaction, realization, valid)
     ).toBe(true)
+    const regionInteraction = { ...interaction, markType: 'Region' as const }
+    const region = appendRegionMark(
+      undefined,
+      realization.workspaceRealizationRef,
+      14,
+      19,
+      81,
+      62
+    )
     expect(
-      acceptsRendererMarkingResponse(
-        { ...interaction, markType: 'Region' },
-        realization,
-        {
-          workspaceRealizationRef: realization.workspaceRealizationRef,
-          marks: [{ kind: 'Region' }],
-        }
-      )
+      acceptsRendererMarkingResponse(regionInteraction, realization, region)
+    ).toBe(true)
+    expect(
+      acceptsRendererMarkingResponse(regionInteraction, realization, {
+        ...region,
+        workspaceRealizationRef: 'wrong-workspace',
+      })
+    ).toBe(false)
+    expect(
+      acceptsRendererMarkingResponse(regionInteraction, realization, {
+        ...region,
+        marks: [{ kind: 'Region', startOffsetX: 1, startOffsetY: 1 }],
+      })
+    ).toBe(false)
+    expect(
+      acceptsRendererMarkingResponse(regionInteraction, realization, {
+        ...region,
+        marks: [{ kind: 'Point', offsetX: 1, offsetY: 1 }],
+      })
     ).toBe(false)
     const regionHtml = preview(
       {
@@ -465,8 +486,9 @@ describe('concrete QFD renderer fidelity', () => {
       },
       frozen.qfd
     )
+    expect(regionHtml).toContain('data-mark-type="Region"')
     expect(regionHtml).toContain(
-      'Region marking is not supported by this reference renderer.'
+      'Drag across the workspace to mark a renderer-local region.'
     )
   })
 })
