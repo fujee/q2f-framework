@@ -1,1143 +1,1268 @@
-import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { ArrowDown, ArrowUp, Upload, X } from 'lucide-react'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+  createContext,
+  useContext,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from 'react'
+import type { ResponseInteraction } from '@/domain/qd/model'
 import type {
-  Choice,
-  Completing,
-  CompletingGap,
-  CompletingItem,
-  Essay,
-  Marking,
-  Ordering,
-  Relating,
-  ResponseInteraction,
-  Selecting,
-  ShortInput,
-  Stimulus,
-} from '@/domain/qd/model'
-import type {
-  InteractionRealization,
+  CompletingItemSourceRealization,
+  ElementPresentation,
+  OrderingPresentation,
+  RelatingSetPresentation,
+  ResponseSiteRealization,
+  SelectionPresentation,
   StimulusRealization,
 } from '@/domain/qfd/model'
-import { findOwningInteractionId } from '@/domain/qfd/layout'
+import { LayoutTree } from './LayoutTree'
 import {
-  findStimulusRealization,
+  appendPointMark,
+  appendRegionMark,
+  appendTextSpanMark,
+  type RendererMarkingResponse,
+} from './markingResponse'
+import { moveOrderingItem } from './orderingResponse'
+import {
+  elementPresentationSemanticRef,
+  elementPresentationText,
+  indexedLayoutable,
+  localPresentationRef,
+  orderedLocalElementPresentations,
   resolveRealizedStimulusContent,
-  splitByMarkers,
-  workspaceStimulus,
+  type LocalPresentationScope,
   type RenderContext,
 } from './renderContext'
-import { useSelection } from './selectionContext'
-import { useCompletion } from './completionContext'
-import { assignmentsForInteraction } from './completionState'
-import { useReportResponse } from './runtimeProgress'
-import { applyItemOrderPolicy } from './itemOrderPolicy'
-import { regionFromPoints } from './markingRegion'
-import { canAddRelation, type Relation } from './relatingRules'
-import { ContainedImage } from './ContainedImage'
+import { useRuntimeProgress } from './runtimeProgress'
 
-// ── Shared pieces ────────────────────────────────────────────────────────────
+interface RendererUiValue {
+  relatingSource: Record<string, string | undefined>
+  setRelatingSource: (interactionRef: string, sourceRef: string) => void
+  completingItem: Record<string, string | undefined>
+  setCompletingItem: (interactionRef: string, itemRef: string) => void
+}
+
+const RendererUiContext = createContext<RendererUiValue | null>(null)
+
+export function RendererUiProvider({ children }: { children: ReactNode }) {
+  const [relatingSource, setRelatingSources] = useState<
+    Record<string, string | undefined>
+  >({})
+  const [completingItem, setCompletingItems] = useState<
+    Record<string, string | undefined>
+  >({})
+  return (
+    <RendererUiContext.Provider
+      value={{
+        relatingSource,
+        setRelatingSource: (interactionRef, sourceRef) =>
+          setRelatingSources((previous) => ({
+            ...previous,
+            [interactionRef]: sourceRef,
+          })),
+        completingItem,
+        setCompletingItem: (interactionRef, itemRef) =>
+          setCompletingItems((previous) => ({
+            ...previous,
+            [interactionRef]: itemRef,
+          })),
+      }}
+    >
+      {children}
+    </RendererUiContext.Provider>
+  )
+}
+
+function useRendererUi(): RendererUiValue {
+  const value = useContext(RendererUiContext)
+  if (!value) throw new Error('Renderer controls require RendererUiProvider')
+  return value
+}
 
 export function EffectiveInstruction({
-  interaction,
-  ir,
+  text,
+  role,
 }: {
-  interaction: ResponseInteraction
-  ir: InteractionRealization
+  text: string
+  role: 'TaskInstruction' | 'OperationalGuidance'
 }) {
-  const text = ir.realizedInstruction?.trim() || interaction.instruction
-  if (!text) return null
-  return <div className="max-w-[70ch] text-sm text-foreground/90">{text}</div>
+  return (
+    <div
+      className={
+        role === 'TaskInstruction'
+          ? 'qfd-instruction'
+          : 'qfd-operational-guidance'
+      }
+      data-instruction-role={role}
+    >
+      {text}
+    </div>
+  )
 }
 
 export function StimulusContent({
-  stimulus,
-  sr,
-  fill = false,
-}: {
-  stimulus: Stimulus
-  sr?: StimulusRealization
-  /** Fill the parent box (used inside Canvas items so the stimulus occupies
-   * exactly the area the author assigned it). */
-  fill?: boolean
-}) {
-  const content = resolveRealizedStimulusContent(stimulus, sr)
-  if (stimulus.type === 'Text') {
-    return (
-      <div
-        className={
-          fill
-            ? 'h-full w-full overflow-auto whitespace-pre-wrap text-sm leading-7'
-            : 'whitespace-pre-wrap text-sm leading-7'
-        }
-      >
-        {content ?? ''}
-      </div>
-    )
-  }
-  if (stimulus.type === 'Image') {
-    return content ? (
-      <img
-        src={content}
-        alt={stimulus.code}
-        className={
-          fill
-            ? 'pointer-events-none h-full w-full object-contain'
-            : 'max-h-72 rounded-md border border-border object-contain'
-        }
-      />
-    ) : (
-      <div
-        className={
-          fill
-            ? 'flex h-full w-full items-center justify-center text-xs text-muted-foreground'
-            : 'rounded-md border border-dashed border-border p-6 text-xs text-muted-foreground'
-        }
-      >
-        No image content
-      </div>
-    )
-  }
-  if (stimulus.type === 'Audio') {
-    return content ? (
-      <audio controls src={content} className="w-full" />
-    ) : (
-      <div className="text-xs text-muted-foreground">No audio content</div>
-    )
-  }
-  return content ? (
-    <video
-      controls
-      src={content}
-      className={
-        fill
-          ? 'h-full w-full object-contain'
-          : 'max-h-72 rounded-md border border-border'
-      }
-    />
-  ) : (
-    <div className="text-xs text-muted-foreground">No video content</div>
-  )
-}
-
-function GapWidget({
-  gap,
-  items = [],
-  compact = false,
-  fill = false,
-}: {
-  gap: CompletingGap
-  items?: CompletingItem[]
-  compact?: boolean
-  fill?: boolean
-}) {
-  // Gaps render as inline elements so they stay within the surrounding text
-  // flow (CompletionWidget inlines them via splitByMarkers).
-  const inline = 'align-middle'
-  switch (gap.type) {
-    case 'TextInputGap':
-      return (
-        <Input
-          placeholder={
-            gap.minLength || gap.maxLength
-              ? `${gap.minLength ?? 0}–${gap.maxLength ?? '∞'} chars`
-              : 'Text'
-          }
-          className={`${inline} ${compact ? 'h-7 w-32' : 'h-8 w-44'}`}
-        />
-      )
-    case 'NumberInputGap':
-      return (
-        <Input
-          type="number"
-          placeholder="Number"
-          className={`${inline} ${compact ? 'h-7 w-24' : 'h-8 w-28'}`}
-        />
-      )
-    case 'DateInputGap':
-      return (
-        <Input
-          type="date"
-          className={`${inline} ${compact ? 'h-7 w-36' : 'h-8 w-40'}`}
-        />
-      )
-    case 'DropTargetGap':
-      return (
-        <DropTargetWidget
-          gap={gap}
-          items={items}
-          compact={compact}
-          fill={fill}
-        />
-      )
-  }
-}
-
-/** Drop-target control for a DropTargetGap. Accepts dragged completing items and
- * shows the currently assigned item with a remove action. */
-function DropTargetWidget({
-  gap,
-  items,
-  compact = false,
-  fill = false,
-}: {
-  gap: CompletingGap
-  items: CompletingItem[]
-  compact?: boolean
-  fill?: boolean
-}) {
-  const { assignedItem, assignItem, removeItem } = useCompletion()
-  const [over, setOver] = useState(false)
-  const assignedId = assignedItem(gap.id)
-  const assigned = items.find((i) => i.id === assignedId)
-
-  const size = fill
-    ? 'h-full w-full px-1'
-    : compact
-      ? 'h-7 min-w-24 px-2 text-xs'
-      : 'h-8 min-w-32 px-3 text-xs'
-  const state = over
-    ? 'border-primary bg-primary/15 text-primary'
-    : assigned
-      ? 'border-solid border-primary/60 bg-primary/10 text-foreground'
-      : 'border-foreground/30 bg-background/75 text-muted-foreground shadow-sm'
-
-  return (
-    <span
-      onDragOver={(e) => {
-        e.preventDefault()
-        setOver(true)
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => {
-        e.preventDefault()
-        setOver(false)
-        const draggedId = e.dataTransfer.getData('text/plain')
-        const dragged = items.find((i) => i.id === draggedId)
-        if (dragged) assignItem(gap.id, dragged.id, dragged.usageLimit)
-      }}
-      className={`${
-        fill ? 'flex' : 'inline-flex'
-      } items-center justify-center gap-1 rounded-md border border-dashed text-center align-middle transition-colors ${size} ${state}`}
-    >
-      {assigned ? (
-        <>
-          {assigned.type === 'ImageCompletingItem' ? (
-            <img
-              src={assigned.imageRef}
-              alt={assigned.code}
-              draggable={false}
-              className="max-h-full max-w-full object-contain"
-            />
-          ) : (
-            <span className="min-w-0 truncate">{assigned.text}</span>
-          )}
-          <button
-            type="button"
-            title="Remove"
-            onClick={() => removeItem(gap.id)}
-            className="shrink-0 text-muted-foreground hover:text-destructive"
-          >
-            <X className="size-3" />
-          </button>
-        </>
-      ) : (
-        <>
-          <ArrowDown className="size-3.5 shrink-0" />
-          <span>{fill ? 'Drop' : 'Drop item'}</span>
-        </>
-      )}
-    </span>
-  )
-}
-
-/** Draggable bank of completing items for DropTargetGap interactions. */
-export function CompletionBankWidget({
-  interaction,
-}: {
-  interaction: Completing
-}) {
-  const { assignments } = useCompletion()
-  const usageCount = (itemId: string) =>
-    Object.values(assignments).filter((v) => v === itemId).length
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-[10px] font-semibold uppercase text-muted-foreground">
-        Options:
-      </span>
-      {interaction.completingItems.map((it) => {
-        const inUse = usageCount(it.id) > 0
-        return (
-          <span
-            key={it.id}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData('text/plain', it.id)
-              e.dataTransfer.effectAllowed = 'move'
-            }}
-            title={inUse ? 'Drag again to move it' : 'Drag into a gap'}
-            className={`inline-flex cursor-grab select-none items-center border text-xs ${
-              it.type === 'ImageCompletingItem'
-                ? 'rounded-md p-1'
-                : 'rounded-full px-2.5 py-1'
-            } ${
-              inUse
-                ? 'border-primary/40 bg-primary/5'
-                : 'border-border bg-background hover:border-primary'
-            }`}
-          >
-            {it.type === 'ImageCompletingItem' ? (
-              <img
-                src={it.imageRef}
-                alt={it.code}
-                draggable={false}
-                className="h-10 w-10 rounded object-contain"
-              />
-            ) : (
-              it.text
-            )}
-          </span>
-        )
-      })}
-    </div>
-  )
-}
-
-function Chip({ code, name }: { code: string; name?: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-xs">
-      <span className="font-mono text-muted-foreground">{code}</span>
-      {name}
-    </span>
-  )
-}
-
-/** Independent placement of a QD response element (Choice token, gap input…). */
-export function ResponseElementWidget({
   ctx,
-  elementKind,
-  elementRef,
-  fill = false,
+  realization,
 }: {
   ctx: RenderContext
-  elementKind: 'Choice' | 'OrderingItem' | 'RelatingElement' | 'CompletingGap'
-  elementRef: string
-  fill?: boolean
+  realization: StimulusRealization
 }) {
-  const { isSelected, toggle, selectedIds } = useSelection()
-  const { assignments } = useCompletion()
-  const ownerId = findOwningInteractionId(ctx.qd, elementKind, elementRef)
-  const owner = ownerId ? ctx.interactionById.get(ownerId) : undefined
-
-  const reportingId =
-    elementKind === 'Choice' || elementKind === 'CompletingGap'
-      ? ownerId
-      : undefined
-  const reportingRaw =
-    elementKind === 'Choice'
-      ? ownerId
-        ? selectedIds(ownerId)
-        : []
-      : elementKind === 'CompletingGap'
-        ? owner?.type === 'Completing'
-          ? assignmentsForInteraction(
-              assignments,
-              owner.completingGaps.map((g) => g.id)
-            )
-          : {}
-        : undefined
-  useReportResponse(reportingId, reportingRaw)
-
-  if (elementKind === 'Choice') {
-    const choice =
-      owner?.type === 'Selecting'
-        ? owner.choices.find((c: Choice) => c.id === elementRef)
-        : undefined
-    const maxSelections = owner?.type === 'Selecting' ? owner.maxSelections : 1
-    const selected = ownerId ? isSelected(ownerId, elementRef) : false
+  const stimulus = ctx.stimuli.get(realization.stimulusRef)
+  if (!stimulus) return null
+  const content = resolveRealizedStimulusContent(stimulus, realization)
+  if (!content)
     return (
-      <button
-        type="button"
-        onClick={() => {
-          if (ownerId) toggle(ownerId, elementRef, maxSelections)
-        }}
-        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors ${
-          selected
-            ? 'border-primary bg-primary text-primary-foreground'
-            : 'border-border bg-background hover:border-primary'
-        }`}
-      >
-        <span className="font-mono">{choice?.code ?? '?'}</span>
-        {choice?.name}
-      </button>
-    )
-  }
-
-  if (elementKind === 'CompletingGap') {
-    const gap = ctx.gapById.get(elementRef)
-    const items = owner?.type === 'Completing' ? owner.completingItems : []
-    return gap ? (
-      <GapWidget gap={gap} items={items} compact fill={fill} />
-    ) : null
-  }
-
-  if (elementKind === 'OrderingItem') {
-    const item =
-      owner?.type === 'Ordering'
-        ? owner.orderingItems.find((i) => i.id === elementRef)
-        : undefined
-    return <Chip code={item?.code ?? '?'} name={item?.name} />
-  }
-
-  const element =
-    owner?.type === 'Relating'
-      ? [
-          ...owner.sourceSet.relatingElements,
-          ...owner.targetSet.relatingElements,
-        ].find((e) => e.id === elementRef)
-      : undefined
-  return <Chip code={element?.code ?? '?'} name={element?.name} />
-}
-
-// ── Per-mechanism widgets ────────────────────────────────────────────────────
-
-function ListSelectionWidget({ interaction }: { interaction: Selecting }) {
-  const { isSelected, toggle, selectedIds } = useSelection()
-  useReportResponse(interaction.id, selectedIds(interaction.id))
-  const single = interaction.maxSelections === 1
-  const choices = useMemo(
-    () =>
-      applyItemOrderPolicy(interaction.choices, interaction.itemOrderPolicy),
-    [interaction.choices, interaction.itemOrderPolicy]
-  )
-
-  return (
-    <div className="space-y-1.5">
-      {choices.map((c) => (
-        <label
-          key={c.id}
-          className="flex cursor-pointer items-center gap-2 text-sm"
-        >
-          <input
-            type={single ? 'radio' : 'checkbox'}
-            name={`qfd-sel-${interaction.id}`}
-            checked={isSelected(interaction.id, c.id)}
-            onChange={() =>
-              toggle(interaction.id, c.id, interaction.maxSelections)
-            }
-            className="accent-primary"
-          />
-          <span className="font-mono text-xs text-muted-foreground">
-            {c.code}
-          </span>
-          {c.name}
-        </label>
-      ))}
-    </div>
-  )
-}
-
-function DirectOrderingWidget({ interaction }: { interaction: Ordering }) {
-  const [ids, setIds] = useState(interaction.orderingItems.map((i) => i.id))
-  useReportResponse(interaction.id, ids)
-  const move = (index: number, delta: number) =>
-    setIds((prev) => {
-      const target = index + delta
-      if (target < 0 || target >= prev.length) return prev
-      const next = [...prev]
-      ;[next[index], next[target]] = [next[target], next[index]]
-      return next
-    })
-
-  return (
-    <div className="space-y-1">
-      {ids.map((id, index) => {
-        const item = interaction.orderingItems.find((i) => i.id === id)
-        if (!item) return null
-        return (
-          <div
-            key={id}
-            className="flex items-center gap-2 rounded-md border border-border px-2 py-1 text-sm"
-          >
-            <span className="w-5 text-right text-xs text-muted-foreground">
-              {index + 1}.
-            </span>
-            <span className="font-mono text-xs text-muted-foreground">
-              {item.code}
-            </span>
-            <span className="flex-1">{item.name}</span>
-            <button
-              type="button"
-              disabled={index === 0}
-              onClick={() => move(index, -1)}
-              className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-            >
-              <ArrowUp className="size-3.5" />
-            </button>
-            <button
-              type="button"
-              disabled={index === ids.length - 1}
-              onClick={() => move(index, 1)}
-              className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-            >
-              <ArrowDown className="size-3.5" />
-            </button>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function OrderNotationWidget({ interaction }: { interaction: Ordering }) {
-  const [ranks, setRanks] = useState<Record<string, string>>({})
-  const ordered = interaction.orderingItems
-    .map((item) => ({ id: item.id, rank: Number(ranks[item.id]) }))
-    .filter((entry) => Number.isFinite(entry.rank))
-    .sort((a, b) => a.rank - b.rank)
-    .map((entry) => entry.id)
-  useReportResponse(interaction.id, ordered)
-  return (
-    <div className="space-y-1.5">
-      {interaction.orderingItems.map((item) => (
-        <label key={item.id} className="flex items-center gap-2 text-sm">
-          <span className="font-mono text-xs text-muted-foreground">
-            {item.code}
-          </span>
-          <span className="flex-1">{item.name}</span>
-          <Input
-            type="number"
-            min={1}
-            max={interaction.orderingItems.length}
-            className="h-7 w-16 text-xs"
-            value={ranks[item.id] ?? ''}
-            onChange={(e) =>
-              setRanks((r) => ({ ...r, [item.id]: e.target.value }))
-            }
-          />
-        </label>
-      ))}
-    </div>
-  )
-}
-
-function DirectRelationWidget({ interaction }: { interaction: Relating }) {
-  const [pairs, setPairs] = useState<Relation[]>([])
-  const [pendingSource, setPendingSource] = useState<string | null>(null)
-  useReportResponse(
-    interaction.id,
-    pairs.map((p) => ({
-      sourceElementRef: p.source,
-      targetElementRef: p.target,
-    }))
-  )
-
-  const sourceEls = interaction.sourceSet.relatingElements
-  const targetEls = interaction.targetSet.relatingElements
-
-  const clickSource = (id: string) =>
-    setPendingSource((prev) => (prev === id ? null : id))
-
-  const clickTarget = (id: string) => {
-    if (!pendingSource) return
-    if (!canAddRelation(pairs, interaction.mappingType, pendingSource, id))
-      return
-    setPairs((p) => [...p, { source: pendingSource, target: id }])
-    // A source that can no longer be reused must be released after linking.
-    if (
-      interaction.mappingType === 'OneToOne' ||
-      interaction.mappingType === 'ManyToOne'
-    ) {
-      setPendingSource(null)
-    }
-  }
-
-  const removePair = (index: number) =>
-    setPairs((p) => p.filter((_, i) => i !== index))
-
-  const sourceExhausted = (id: string) =>
-    (interaction.mappingType === 'OneToOne' ||
-      interaction.mappingType === 'ManyToOne') &&
-    pairs.some((p) => p.source === id)
-
-  const targetBlocked = (id: string) =>
-    pendingSource !== null &&
-    !canAddRelation(pairs, interaction.mappingType, pendingSource, id)
-
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-start gap-6">
-        <div className="space-y-1">
-          <p className="text-xs font-medium text-muted-foreground">
-            {interaction.sourceSet.name}
-          </p>
-          {sourceEls.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              disabled={sourceExhausted(s.id)}
-              onClick={() => clickSource(s.id)}
-              className={`block rounded-md border px-2 py-1 text-left text-sm transition-colors disabled:opacity-40 ${
-                pendingSource === s.id
-                  ? 'border-primary bg-primary/10'
-                  : 'border-border hover:border-primary/50'
-              }`}
-            >
-              <span className="font-mono text-xs text-muted-foreground">
-                {s.code}
-              </span>{' '}
-              {s.name}
-            </button>
-          ))}
-        </div>
-        <div className="space-y-1">
-          <p className="text-xs font-medium text-muted-foreground">
-            {interaction.targetSet.name}
-          </p>
-          {targetEls.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              disabled={targetBlocked(t.id)}
-              onClick={() => clickTarget(t.id)}
-              className={`block rounded-md border px-2 py-1 text-left text-sm transition-colors disabled:opacity-40 ${
-                pendingSource
-                  ? 'border-primary hover:bg-primary/10'
-                  : 'border-border'
-              }`}
-            >
-              <span className="font-mono text-xs text-muted-foreground">
-                {t.code}
-              </span>{' '}
-              {t.name}
-            </button>
-          ))}
-        </div>
+      <div className="qfd-stimulus-content-unavailable">
+        Content unavailable
       </div>
-      {pairs.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {pairs.map((p, i) => (
-            <span
-              key={`${p.source}:${p.target}`}
-              className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground"
-            >
-              {sourceEls.find((s) => s.id === p.source)?.code}→
-              {targetEls.find((t) => t.id === p.target)?.code}
-              <button
-                type="button"
-                title="Remove relation"
-                onClick={() => removePair(i)}
-                className="text-muted-foreground hover:text-destructive"
-              >
-                <X className="size-3" />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function RelationNotationWidget({ interaction }: { interaction: Relating }) {
-  const [mapping, setMapping] = useState<Record<string, string>>({})
-  const sourceEls = interaction.sourceSet.relatingElements
-  const targetEls = interaction.targetSet.relatingElements
-
-  const pairsFor = (targetId: string): Relation[] =>
-    targetEls
-      .filter((t) => t.id !== targetId && mapping[t.id])
-      .map((t) => ({ source: mapping[t.id], target: t.id }))
-
-  const pairs = targetEls
-    .filter((t) => mapping[t.id])
-    .map((t) => ({ sourceElementRef: mapping[t.id], targetElementRef: t.id }))
-  useReportResponse(interaction.id, pairs)
-
-  const sourceBlocked = (targetId: string, sourceId: string) =>
-    !canAddRelation(
-      pairsFor(targetId),
-      interaction.mappingType,
-      sourceId,
-      targetId
     )
-
-  return (
-    <div className="space-y-1.5">
-      {targetEls.map((t) => (
-        <div key={t.id} className="flex items-center gap-2 text-sm">
-          <span className="font-mono text-xs text-muted-foreground">
-            {t.code}
-          </span>
-          <span className="flex-1">{t.name}</span>
-          <Select
-            value={mapping[t.id]}
-            onValueChange={(v) => setMapping((m) => ({ ...m, [t.id]: v }))}
-          >
-            <SelectTrigger className="h-7 w-40 text-xs">
-              <SelectValue placeholder="Select source" />
-            </SelectTrigger>
-            <SelectContent>
-              {sourceEls.map((s) => (
-                <SelectItem
-                  key={s.id}
-                  value={s.id}
-                  disabled={sourceBlocked(t.id, s.id)}
-                >
-                  {s.code} · {s.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {mapping[t.id] && (
-            <button
-              type="button"
-              title="Remove relation"
-              onClick={() =>
-                setMapping((m) => {
-                  const next = { ...m }
-                  delete next[t.id]
-                  return next
-                })
-              }
-              className="text-muted-foreground hover:text-destructive"
-            >
-              <X className="size-3.5" />
-            </button>
-          )}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function CompletionWidget({ interaction }: { interaction: Completing }) {
-  const { assignments } = useCompletion()
-  useReportResponse(
-    interaction.id,
-    assignmentsForInteraction(
-      assignments,
-      interaction.completingGaps.map((g) => g.id)
-    )
-  )
-  const localGaps = interaction.completingGaps.filter((g) => !g.stimulusRef)
-  const content = interaction.localContent
-  const bank =
-    interaction.completingGaps.some((g) => g.type === 'DropTargetGap') &&
-    interaction.completingItems.length > 0 ? (
-      <CompletionBankWidget interaction={interaction} />
-    ) : null
-
-  if (content) {
-    const markerGaps = localGaps.filter(
-      (g) => g.anchor?.kind === 'TextAnchor' && g.anchor.marker
-    )
-    if (markerGaps.length > 0) {
+  switch (realization.realizedModality) {
+    case 'Text':
+      return <div className="whitespace-pre-wrap">{content}</div>
+    case 'Image':
       return (
-        <div className="space-y-3">
-          <div className="whitespace-pre-wrap text-sm leading-9">
-            {splitByMarkers(
-              content,
-              markerGaps.map((g) => ({
-                marker: g.anchor?.kind === 'TextAnchor' ? g.anchor.marker : '',
-                node: (
-                  <GapWidget
-                    gap={g}
-                    items={interaction.completingItems}
-                    compact
-                  />
-                ),
-              }))
-            )}
-          </div>
-          {bank}
-        </div>
+        <img
+          src={content}
+          alt=""
+          className="max-h-full max-w-full object-contain"
+        />
       )
-    }
-    return (
-      <div className="space-y-3">
-        <div className="whitespace-pre-wrap text-sm leading-7">{content}</div>
-        <div className="flex flex-wrap gap-2">
-          {localGaps.map((g) => (
-            <GapWidget key={g.id} gap={g} items={interaction.completingItems} />
-          ))}
-        </div>
-        {bank}
-      </div>
-    )
+    case 'Audio':
+      return <audio controls src={content} />
+    case 'Video':
+      return content.endsWith('.svg') ? (
+        <img
+          src={content}
+          alt="Temporal visual stimulus"
+          data-renderer-video-carrier="animated-svg"
+          className="max-h-full max-w-full object-contain"
+        />
+      ) : (
+        <video controls src={content} />
+      )
   }
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-2">
-        {localGaps.map((g) => (
-          <GapWidget key={g.id} gap={g} items={interaction.completingItems} />
-        ))}
-      </div>
-      {bank}
-    </div>
-  )
 }
 
-function ShortEntryWidget({ interaction }: { interaction: ShortInput }) {
-  const [value, setValue] = useState('')
-  useReportResponse(interaction.id, value)
-  const type =
-    interaction.inputType === 'Text'
-      ? 'text'
-      : interaction.inputType === 'Number'
-        ? 'number'
-        : 'date'
+function LocalPresentationLayout({
+  ctx,
+  scope,
+  renderElement,
+}: {
+  ctx: RenderContext
+  scope: LocalPresentationScope
+  renderElement: (element: ElementPresentation) => ReactNode
+}) {
+  const scopeRef = localPresentationRef(scope)
   return (
-    <Input
-      type={type}
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      className="w-56"
-      placeholder={interaction.inputType}
+    <LayoutTree
+      layout={scope.value.localLayout}
+      renderPlacement={(ref) => {
+        const entry = indexedLayoutable(ctx, ref, scopeRef)
+        return entry?.kind === 'ElementPresentation'
+          ? renderElement(entry.value)
+          : null
+      }}
     />
   )
 }
 
-function ExtendedTextWidget({ interaction }: { interaction: Essay }) {
-  const hint = interaction.lengthUnit
-    ? `${interaction.minLength ?? 0}–${interaction.maxLength ?? '∞'} ${interaction.lengthUnit.toLowerCase()}`
-    : undefined
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : []
+}
+
+function responseRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function setSelection(
+  current: readonly string[],
+  choiceRef: string,
+  checked: boolean,
+  maxSelections: number
+): string[] {
+  if (maxSelections === 1) return checked ? [choiceRef] : []
+  if (!checked) return current.filter((id) => id !== choiceRef)
+  if (current.includes(choiceRef) || current.length >= maxSelections)
+    return [...current]
+  return [...current, choiceRef]
+}
+
+function SelectionPresentationControl({
+  ctx,
+  interaction,
+  presentation,
+  gapRef,
+  disabled,
+}: {
+  ctx: RenderContext
+  interaction:
+    | Extract<ResponseInteraction, { type: 'Selecting' }>
+    | Extract<ResponseInteraction, { type: 'Completing' }>
+  presentation: SelectionPresentation
+  gapRef?: string
+  disabled: boolean
+}) {
+  const { responses, setResponse } = useRuntimeProgress()
+  const current =
+    interaction.type === 'Selecting'
+      ? stringArray(responses[interaction.id])
+      : String(responseRecord(responses[interaction.id])[gapRef ?? ''] ?? '')
+  const presentations = orderedLocalElementPresentations(ctx, {
+    kind: 'SelectionPresentation',
+    value: presentation,
+  })
+  const update = (itemRef: string, checked: boolean) => {
+    if (interaction.type === 'Selecting') {
+      const selected = Array.isArray(current) ? current : []
+      setResponse(
+        interaction.id,
+        setSelection(selected, itemRef, checked, interaction.maxSelections)
+      )
+      return
+    }
+    setResponse(interaction.id, {
+      ...responseRecord(responses[interaction.id]),
+      [gapRef ?? '']: checked ? itemRef : '',
+    })
+  }
+  if (presentation.mode === 'Collapsed')
+    return (
+      <select
+        aria-label={gapRef ? `Complete ${gapRef}` : 'Select response'}
+        data-selection-mode="Collapsed"
+        disabled={disabled}
+        multiple={
+          interaction.type === 'Selecting' && interaction.maxSelections > 1
+        }
+        value={current}
+        onChange={(event) => {
+          if (interaction.type === 'Selecting') {
+            const next = [...event.currentTarget.selectedOptions].map(
+              ({ value }) => value
+            )
+            setResponse(
+              interaction.id,
+              next.slice(0, interaction.maxSelections)
+            )
+          } else update(event.currentTarget.value, true)
+        }}
+      >
+        {interaction.type === 'Completing' ? (
+          <option value="">Choose…</option>
+        ) : null}
+        {presentations.map((element) => (
+          <option
+            key={element.id}
+            value={elementPresentationSemanticRef(element)}
+          >
+            {elementPresentationText(ctx, element)}
+          </option>
+        ))}
+      </select>
+    )
   return (
-    <div className="space-y-1">
-      <Textarea
-        rows={5}
-        placeholder={hint ? `Write ${hint}` : 'Write your answer'}
+    <fieldset disabled={disabled} data-selection-mode="Expanded">
+      <LocalPresentationLayout
+        ctx={ctx}
+        scope={{ kind: 'SelectionPresentation', value: presentation }}
+        renderElement={(element) => {
+          const itemRef = elementPresentationSemanticRef(element)
+          const checked =
+            typeof current === 'string'
+              ? current === itemRef
+              : current.includes(itemRef)
+          return (
+            <label className="qfd-option" data-element-id={element.id}>
+              <input
+                type={
+                  interaction.type === 'Selecting' &&
+                  interaction.maxSelections > 1
+                    ? 'checkbox'
+                    : 'radio'
+                }
+                name={gapRef ?? interaction.id}
+                checked={checked}
+                onChange={(event) =>
+                  update(itemRef, event.currentTarget.checked)
+                }
+              />
+              {elementPresentationText(ctx, element)}
+            </label>
+          )
+        }}
+      />
+    </fieldset>
+  )
+}
+
+export function StandaloneSelection({
+  ctx,
+  interactionRef,
+  presentation,
+  disabled,
+}: {
+  ctx: RenderContext
+  interactionRef: string
+  presentation: SelectionPresentation
+  disabled: boolean
+}) {
+  const interaction = ctx.interactions.get(interactionRef)
+  return interaction?.type === 'Selecting' ? (
+    <SelectionPresentationControl
+      ctx={ctx}
+      interaction={interaction}
+      presentation={presentation}
+      disabled={disabled}
+    />
+  ) : null
+}
+
+export function CompletingItemSelection({
+  ctx,
+  interactionRef,
+  presentation,
+  gapRef,
+  disabled,
+}: {
+  ctx: RenderContext
+  interactionRef: string
+  presentation: SelectionPresentation
+  gapRef: string
+  disabled: boolean
+}) {
+  const interaction = ctx.interactions.get(interactionRef)
+  return interaction?.type === 'Completing' ? (
+    <SelectionPresentationControl
+      ctx={ctx}
+      interaction={interaction}
+      presentation={presentation}
+      gapRef={gapRef}
+      disabled={disabled}
+    />
+  ) : null
+}
+
+export function OrderingControl({
+  ctx,
+  interactionRef,
+  presentation,
+  disabled,
+}: {
+  ctx: RenderContext
+  interactionRef: string
+  presentation: OrderingPresentation
+  disabled: boolean
+}) {
+  const interaction = ctx.interactions.get(interactionRef)
+  const realization = ctx.interactionRealizations.get(interactionRef)
+  const { responses, setResponse } = useRuntimeProgress()
+  const [ranks, setRanks] = useState<Record<string, string>>({})
+  if (
+    interaction?.type !== 'Ordering' ||
+    realization?.type !== 'OrderingRealization'
+  )
+    return null
+  const presented = orderedLocalElementPresentations(ctx, {
+    kind: 'OrderingPresentation',
+    value: presentation,
+  })
+  const initialOrder = presented.map(elementPresentationSemanticRef)
+  const order = stringArray(responses[interactionRef])
+  const currentOrder =
+    order.length === initialOrder.length ? order : initialOrder
+  const byRef = new Map(
+    presented.map((element) => [
+      elementPresentationSemanticRef(element),
+      element,
+    ])
+  )
+  if (realization.mode === 'DirectOrdering')
+    return (
+      <div data-ordering-mode="DirectOrdering">
+        <LocalPresentationLayout
+          ctx={ctx}
+          scope={{ kind: 'OrderingPresentation', value: presentation }}
+          renderElement={(slot) => {
+            const index = presented.indexOf(slot)
+            const itemRef = currentOrder[index]
+            const element = byRef.get(itemRef)
+            if (!element) return null
+            return (
+              <div className="qfd-element" data-element-id={element.id}>
+                {elementPresentationText(ctx, element)}
+                <button
+                  type="button"
+                  disabled={disabled || index === 0}
+                  aria-label={`Move ${itemRef} up`}
+                  onClick={() =>
+                    setResponse(
+                      interactionRef,
+                      moveOrderingItem(currentOrder, itemRef, -1)
+                    )
+                  }
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  disabled={disabled || index === currentOrder.length - 1}
+                  aria-label={`Move ${itemRef} down`}
+                  onClick={() =>
+                    setResponse(
+                      interactionRef,
+                      moveOrderingItem(currentOrder, itemRef, 1)
+                    )
+                  }
+                >
+                  ↓
+                </button>
+              </div>
+            )
+          }}
+        />
+      </div>
+    )
+  return (
+    <div data-ordering-mode="OrderNotation">
+      <LocalPresentationLayout
+        ctx={ctx}
+        scope={{ kind: 'OrderingPresentation', value: presentation }}
+        renderElement={(element) => {
+          const itemRef = elementPresentationSemanticRef(element)
+          return (
+            <label className="qfd-element" data-element-id={element.id}>
+              {elementPresentationText(ctx, element)}
+              <input
+                type="number"
+                min={1}
+                max={presented.length}
+                disabled={disabled}
+                aria-label={`Rank ${itemRef}`}
+                value={ranks[itemRef] ?? ''}
+                onChange={(event) => {
+                  const next = {
+                    ...ranks,
+                    [itemRef]: event.currentTarget.value,
+                  }
+                  setRanks(next)
+                  const ranked = presented.map((candidate) => {
+                    const ref = elementPresentationSemanticRef(candidate)
+                    return { itemRef: ref, rank: Number(next[ref]) }
+                  })
+                  const allValid =
+                    ranked.every(
+                      ({ rank }) =>
+                        Number.isInteger(rank) &&
+                        rank >= 1 &&
+                        rank <= presented.length
+                    ) &&
+                    new Set(ranked.map(({ rank }) => rank)).size ===
+                      ranked.length
+                  setResponse(
+                    interactionRef,
+                    allValid
+                      ? ranked
+                          .sort((left, right) => left.rank - right.rank)
+                          .map(({ itemRef: ref }) => ref)
+                      : undefined
+                  )
+                }}
+              />
+            </label>
+          )
+        }}
       />
     </div>
   )
 }
 
-function ArtifactWidget({ digital }: { digital: boolean }) {
-  if (digital) {
-    return (
-      <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-border p-4 text-xs text-muted-foreground hover:border-primary/50">
-        <Upload className="size-4" />
-        Attach files
-        <input type="file" multiple className="sr-only" />
-      </label>
-    )
-  }
+function relationPairs(value: unknown): Array<{
+  sourceElementRef: string
+  targetElementRef: string
+}> {
+  if (!Array.isArray(value)) return []
+  return value.filter(
+    (item): item is { sourceElementRef: string; targetElementRef: string } =>
+      typeof item === 'object' &&
+      item !== null &&
+      'sourceElementRef' in item &&
+      typeof item.sourceElementRef === 'string' &&
+      'targetElementRef' in item &&
+      typeof item.targetElementRef === 'string'
+  )
+}
+
+export function RelatingSetControl({
+  ctx,
+  interactionRef,
+  presentation,
+  set,
+  disabled,
+}: {
+  ctx: RenderContext
+  interactionRef: string
+  presentation: RelatingSetPresentation
+  set: 'Source' | 'Target'
+  disabled: boolean
+}) {
+  const interaction = ctx.interactions.get(interactionRef)
+  const realization = ctx.interactionRealizations.get(interactionRef)
+  const { responses, setResponse } = useRuntimeProgress()
+  const ui = useRendererUi()
+  if (
+    interaction?.type !== 'Relating' ||
+    realization?.type !== 'RelatingRealization'
+  )
+    return null
+  const scientificSet =
+    set === 'Source' ? interaction.sourceSet : interaction.targetSet
+  const label = presentation.realizedLabel ?? scientificSet.label
   return (
-    <div className="rounded-md border-2 border-dashed border-border p-4 text-center text-xs text-muted-foreground">
-      Physical submission — attach on paper
+    <section
+      className="qfd-relating-set"
+      data-relating-mode={realization.mode}
+      data-relating-set={set}
+    >
+      {label ? <h4>{label}</h4> : null}
+      <LocalPresentationLayout
+        ctx={ctx}
+        scope={{ kind: 'RelatingSetPresentation', value: presentation }}
+        renderElement={(element) => {
+          const elementRef = elementPresentationSemanticRef(element)
+          if (realization.mode === 'RelationNotation')
+            return (
+              <span className="qfd-element" data-element-id={element.id}>
+                {elementPresentationText(ctx, element)}
+              </span>
+            )
+          const selected =
+            set === 'Source' && ui.relatingSource[interactionRef] === elementRef
+          return (
+            <button
+              type="button"
+              className="qfd-element"
+              data-element-id={element.id}
+              data-selected={selected || undefined}
+              disabled={
+                disabled ||
+                (set === 'Target' && !ui.relatingSource[interactionRef])
+              }
+              onClick={() => {
+                if (set === 'Source') {
+                  ui.setRelatingSource(interactionRef, elementRef)
+                  return
+                }
+                const sourceElementRef = ui.relatingSource[interactionRef]
+                if (!sourceElementRef) return
+                setResponse(interactionRef, [
+                  ...relationPairs(responses[interactionRef]),
+                  { sourceElementRef, targetElementRef: elementRef },
+                ])
+              }}
+            >
+              {elementPresentationText(ctx, element)}
+            </button>
+          )
+        }}
+      />
+    </section>
+  )
+}
+
+export function RelationNotationSite({
+  ctx,
+  interactionRef,
+  site,
+  disabled,
+}: {
+  ctx: RenderContext
+  interactionRef: string
+  site: ResponseSiteRealization
+  disabled: boolean
+}) {
+  const interaction = ctx.interactions.get(interactionRef)
+  const realization = ctx.interactionRealizations.get(interactionRef)
+  const { responses, setResponse } = useRuntimeProgress()
+  const [source, setSource] = useState('')
+  const [target, setTarget] = useState('')
+  if (
+    interaction?.type !== 'Relating' ||
+    realization?.type !== 'RelatingRealization'
+  )
+    return null
+  const sourceElements = orderedLocalElementPresentations(ctx, {
+    kind: 'RelatingSetPresentation',
+    value: realization.sourceSetPresentation,
+  })
+  const targetElements = orderedLocalElementPresentations(ctx, {
+    kind: 'RelatingSetPresentation',
+    value: realization.targetSetPresentation,
+  })
+  return (
+    <div
+      className="qfd-response-site"
+      data-response-site-id={site.id}
+      data-relating-mode="RelationNotation"
+    >
+      <select
+        aria-label="Relation source notation"
+        disabled={disabled}
+        value={source}
+        onChange={(event) => setSource(event.currentTarget.value)}
+      >
+        <option value="">Source…</option>
+        {sourceElements.map((element) => (
+          <option
+            key={element.id}
+            value={elementPresentationSemanticRef(element)}
+          >
+            {elementPresentationText(ctx, element)}
+          </option>
+        ))}
+      </select>
+      <select
+        aria-label="Relation target notation"
+        disabled={disabled}
+        value={target}
+        onChange={(event) => setTarget(event.currentTarget.value)}
+      >
+        <option value="">Target…</option>
+        {targetElements.map((element) => (
+          <option
+            key={element.id}
+            value={elementPresentationSemanticRef(element)}
+          >
+            {elementPresentationText(ctx, element)}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        disabled={disabled || !source || !target}
+        onClick={() =>
+          setResponse(interactionRef, [
+            ...relationPairs(responses[interactionRef]),
+            { sourceElementRef: source, targetElementRef: target },
+          ])
+        }
+      >
+        Add relation notation
+      </button>
     </div>
   )
 }
 
-type Mark =
-  | { kind: 'point'; x: number; y: number }
-  | { kind: 'region'; x: number; y: number; width: number; height: number }
-
-interface TextSpanMark {
-  start: number
-  end: number
+export function CompletingItemSource({
+  ctx,
+  interactionRef,
+  source,
+  disabled,
+}: {
+  ctx: RenderContext
+  interactionRef: string
+  source: CompletingItemSourceRealization
+  disabled: boolean
+}) {
+  const interaction = ctx.interactions.get(interactionRef)
+  const ui = useRendererUi()
+  if (interaction?.type !== 'Completing') return null
+  return (
+    <section className="qfd-item-source" data-assignment-mode="DirectPlacement">
+      <strong>Options:</strong>
+      <LocalPresentationLayout
+        ctx={ctx}
+        scope={{ kind: 'CompletingItemSourceRealization', value: source }}
+        renderElement={(element) => {
+          const itemRef = elementPresentationSemanticRef(element)
+          return (
+            <button
+              type="button"
+              className="qfd-element"
+              data-element-id={element.id}
+              data-selected={
+                ui.completingItem[interactionRef] === itemRef || undefined
+              }
+              disabled={disabled}
+              onClick={() => ui.setCompletingItem(interactionRef, itemRef)}
+            >
+              {elementPresentationText(ctx, element)}
+            </button>
+          )
+        }}
+      />
+    </section>
+  )
 }
 
-/** Interactive TextSpan marking: drag across the words of the stimulus text to
- * select a span; the selected span is highlighted. */
-function TextSpanMarking({
-  content,
-  maxMarks,
+function updateGapResponse(
+  responses: Record<string, unknown>,
+  setResponse: (interactionRef: string, raw: unknown) => void,
+  interactionRef: string,
+  gapRef: string,
+  value: unknown
+) {
+  setResponse(interactionRef, {
+    ...responseRecord(responses[interactionRef]),
+    [gapRef]: value,
+  })
+}
+
+export function ScalarResponseSite({
+  interactionRef,
+  site,
+  kind,
+  disabled,
 }: {
-  content: string
-  maxMarks: number
+  interactionRef: string
+  site: ResponseSiteRealization
+  kind: 'ShortInput' | 'Essay'
+  disabled: boolean
 }) {
-  const [marks, setMarks] = useState<TextSpanMark[]>([])
-  const [drag, setDrag] = useState<{ start: number; current: number } | null>(
-    null
-  )
-
-  const parts = useMemo(() => {
-    const out: { text: string; wordIndex: number | null }[] = []
-    const regex = /[^\s]+/g
-    let lastIndex = 0
-    let wordCount = 0
-    let m: RegExpExecArray | null
-    while ((m = regex.exec(content)) !== null) {
-      if (m.index > lastIndex) {
-        out.push({ text: content.slice(lastIndex, m.index), wordIndex: null })
-      }
-      out.push({ text: m[0], wordIndex: wordCount++ })
-      lastIndex = m.index + m[0].length
-    }
-    if (lastIndex < content.length) {
-      out.push({ text: content.slice(lastIndex), wordIndex: null })
-    }
-    return out
-  }, [content])
-
-  const isActive = (wordIndex: number | null): boolean => {
-    if (wordIndex === null) return false
-    if (drag) {
-      const start = Math.min(drag.start, drag.current)
-      const end = Math.max(drag.start, drag.current)
-      return wordIndex >= start && wordIndex <= end
-    }
-    return marks.some((s) => wordIndex >= s.start && wordIndex <= s.end)
-  }
-
-  const commit = () => {
-    if (!drag) return
-    const start = Math.min(drag.start, drag.current)
-    const end = Math.max(drag.start, drag.current)
-    setMarks((prev) =>
-      prev.length >= maxMarks ? prev : [...prev, { start, end }]
-    )
-    setDrag(null)
-  }
-
+  const { setResponse } = useRuntimeProgress()
   return (
-    <div className="space-y-1">
-      <div
-        className="select-none whitespace-pre-wrap rounded-md border border-border bg-muted/20 p-3 text-sm leading-7"
-        onMouseUp={commit}
-        onMouseLeave={commit}
-      >
-        {parts.map((part, i) =>
-          part.wordIndex === null ? (
-            <span key={i}>{part.text}</span>
-          ) : (
-            <span
-              key={i}
-              onMouseDown={() =>
-                setDrag({ start: part.wordIndex!, current: part.wordIndex! })
+    <div className="qfd-response-site" data-response-site-id={site.id}>
+      {kind === 'Essay' ? (
+        <textarea
+          disabled={disabled}
+          aria-label="Essay response"
+          onChange={(event) =>
+            setResponse(interactionRef, event.currentTarget.value)
+          }
+        />
+      ) : (
+        <input
+          disabled={disabled}
+          aria-label="Short response"
+          onChange={(event) =>
+            setResponse(interactionRef, event.currentTarget.value)
+          }
+        />
+      )}
+    </div>
+  )
+}
+
+export function ArtifactResponseSite({
+  ctx,
+  interactionRef,
+  site,
+  disabled,
+}: {
+  ctx: RenderContext
+  interactionRef: string
+  site: ResponseSiteRealization
+  disabled: boolean
+}) {
+  const realization = ctx.interactionRealizations.get(interactionRef)
+  const { setResponse } = useRuntimeProgress()
+  if (realization?.type !== 'ArtifactSubmissionRealization') return null
+  return (
+    <div className="qfd-response-site" data-response-site-id={site.id}>
+      {realization.submissionMode === 'PhysicalSubmission' ? (
+        'Physical submission required'
+      ) : (
+        <input
+          disabled={disabled}
+          type="file"
+          aria-label="Artifact submission"
+          multiple
+          onChange={(event) =>
+            setResponse(
+              interactionRef,
+              [...(event.currentTarget.files ?? [])].map((file) => file.name)
+            )
+          }
+        />
+      )}
+    </div>
+  )
+}
+
+export function CompletingResponseSite({
+  interactionRef,
+  site,
+  gapRef,
+  purpose,
+  disabled,
+}: {
+  ctx: RenderContext
+  interactionRef: string
+  site: ResponseSiteRealization
+  gapRef: string
+  purpose: 'Input' | 'Placement'
+  disabled: boolean
+}) {
+  const { responses, setResponse } = useRuntimeProgress()
+  const ui = useRendererUi()
+  const selectedItem = ui.completingItem[interactionRef]
+  return (
+    <div
+      className="qfd-response-site"
+      data-response-site-id={site.id}
+      data-gap-ref={gapRef}
+      data-response-placement="Referenced"
+    >
+      {purpose === 'Input' ? (
+        <input
+          disabled={disabled}
+          aria-label={`Complete ${gapRef}`}
+          onChange={(event) =>
+            updateGapResponse(
+              responses,
+              setResponse,
+              interactionRef,
+              gapRef,
+              event.currentTarget.value
+            )
+          }
+        />
+      ) : (
+        <button
+          type="button"
+          disabled={disabled || !selectedItem}
+          onClick={() =>
+            updateGapResponse(
+              responses,
+              setResponse,
+              interactionRef,
+              gapRef,
+              selectedItem
+            )
+          }
+        >
+          Place selected item at {gapRef}
+        </button>
+      )}
+    </div>
+  )
+}
+
+export function ReferencedSelectionSite({
+  ctx,
+  interactionRef,
+  site,
+  stimulusRealizationRef,
+  disabled,
+}: {
+  ctx: RenderContext
+  interactionRef: string
+  site: ResponseSiteRealization
+  stimulusRealizationRef: string
+  disabled: boolean
+}) {
+  const interaction = ctx.interactions.get(interactionRef)
+  const realization = ctx.interactionRealizations.get(interactionRef)
+  const { responses, setResponse } = useRuntimeProgress()
+  if (
+    interaction?.type !== 'Selecting' ||
+    realization?.type !== 'SelectingRealization'
+  )
+    return null
+  const workspace = realization.workspaceRealizations.find(
+    (candidate) => candidate.stimulusRealizationRef === stimulusRealizationRef
+  )
+  if (!workspace) return null
+  const selected = stringArray(responses[interactionRef])
+  return (
+    <fieldset
+      className="qfd-response-site"
+      data-response-site-id={site.id}
+      data-selection-mode="ReferencedSelection"
+      disabled={disabled}
+    >
+      {workspace.choiceRealizations.map(({ choiceRef }) => {
+        const choice = interaction.choices.find(({ id }) => id === choiceRef)
+        const checked = selected.includes(choiceRef)
+        return (
+          <label className="qfd-option" key={choiceRef}>
+            <input
+              type={interaction.maxSelections === 1 ? 'radio' : 'checkbox'}
+              checked={checked}
+              onChange={(event) =>
+                setResponse(
+                  interactionRef,
+                  setSelection(
+                    selected,
+                    choiceRef,
+                    event.currentTarget.checked,
+                    interaction.maxSelections
+                  )
+                )
               }
-              onMouseEnter={() => {
-                if (drag) setDrag({ ...drag, current: part.wordIndex! })
-              }}
-              className={`rounded-sm transition-colors ${
-                isActive(part.wordIndex)
-                  ? 'bg-primary/40'
-                  : 'hover:bg-muted-foreground/10'
-              }`}
+            />
+            {choiceRef}: {choice?.semanticContent ?? choiceRef}
+          </label>
+        )
+      })}
+    </fieldset>
+  )
+}
+
+function WorkspaceSelectingControls({
+  ctx,
+  realizationRef,
+  interactionRef,
+  disabled,
+}: {
+  ctx: RenderContext
+  realizationRef: string
+  interactionRef: string
+  disabled: boolean
+}) {
+  const interaction = ctx.interactions.get(interactionRef)
+  const realization = ctx.interactionRealizations.get(interactionRef)
+  const { responses, setResponse } = useRuntimeProgress()
+  if (
+    interaction?.type !== 'Selecting' ||
+    realization?.type !== 'SelectingRealization'
+  )
+    return null
+  const workspace = realization.workspaceRealizations.find(
+    (candidate) => candidate.stimulusRealizationRef === realizationRef
+  )
+  if (!workspace) return null
+  const selected = stringArray(responses[interactionRef])
+  if (workspace.mode === 'ReferencedSelection')
+    return (
+      <div data-selection-mode="ReferencedSelection">
+        {workspace.choiceRealizations.map(
+          ({ choiceRef, realizationAnchor }) => (
+            <span
+              className="qfd-affordance"
+              data-owner-interaction={interactionRef}
+              data-choice-ref={choiceRef}
+              data-anchor-kind={realizationAnchor?.kind}
+              key={choiceRef}
             >
-              {part.text}
+              {choiceRef}
             </span>
           )
         )}
       </div>
-      <div className="flex items-center gap-2">
-        <p className="text-[11px] text-muted-foreground">
-          Drag across the words to mark a text span.
-        </p>
-        {marks.length > 0 && (
+    )
+  return (
+    <div data-selection-mode="DirectSelection">
+      {workspace.choiceRealizations.map(({ choiceRef, realizationAnchor }) => {
+        const choice = interaction.choices.find(({ id }) => id === choiceRef)
+        const checked = selected.includes(choiceRef)
+        return (
           <button
             type="button"
-            onClick={() => setMarks([])}
-            className="text-[11px] text-destructive hover:underline"
+            className="qfd-affordance"
+            data-owner-interaction={interactionRef}
+            data-choice-ref={choiceRef}
+            data-anchor-kind={realizationAnchor?.kind}
+            aria-pressed={checked}
+            disabled={disabled}
+            key={choiceRef}
+            onClick={() =>
+              setResponse(
+                interactionRef,
+                setSelection(
+                  selected,
+                  choiceRef,
+                  !checked,
+                  interaction.maxSelections
+                )
+              )
+            }
           >
-            Clear
+            {choice?.semanticContent ?? choiceRef}
           </button>
-        )}
-      </div>
+        )
+      })}
     </div>
   )
 }
 
-export function MarkingWidget({
+function WorkspaceCompletingControls({
   ctx,
-  interaction,
+  realizationRef,
+  interactionRef,
+  disabled,
 }: {
   ctx: RenderContext
-  interaction: Marking
+  realizationRef: string
+  interactionRef: string
+  disabled: boolean
 }) {
-  const [marks, setMarks] = useState<Mark[]>([])
-  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(
-    null
+  const interaction = ctx.interactions.get(interactionRef)
+  const realization = ctx.interactionRealizations.get(interactionRef)
+  const { responses, setResponse } = useRuntimeProgress()
+  const ui = useRendererUi()
+  if (
+    interaction?.type !== 'Completing' ||
+    realization?.type !== 'CompletingRealization'
   )
-  const [dragCurrent, setDragCurrent] = useState<{
-    x: number
-    y: number
-  } | null>(null)
-  const isRegion = interaction.markType === 'Region'
-
-  const stimulus = workspaceStimulus(ctx, interaction.id)
-  if (!stimulus)
-    return (
-      <div className="text-xs text-destructive">
-        No workspace stimulus available for marking.
-      </div>
-    )
-  const content = resolveRealizedStimulusContent(
-    stimulus,
-    findStimulusRealization(ctx, stimulus.id)
-  )
-
-  if (stimulus.type === 'Text') {
-    if (!content)
-      return (
-        <div className="text-xs text-muted-foreground">
-          No text content for marking.
-        </div>
-      )
-    // The stimulus text itself is the selectable marking surface.
-    return <TextSpanMarking content={content} maxMarks={interaction.maxMarks} />
-  }
-  if (!content)
-    return (
-      <div className="text-xs text-muted-foreground">
-        No image content for marking.
-      </div>
-    )
-
-  const toPoint = (e: ReactMouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect()
-    return {
-      x: (e.clientX - rect.left) / rect.width,
-      y: (e.clientY - rect.top) / rect.height,
-    }
-  }
-
-  const handleMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
-    if (marks.length >= interaction.maxMarks) return
-    if (isRegion) {
-      setDragStart(toPoint(e))
-    } else {
-      const p = toPoint(e)
-      setMarks((prev) => [...prev, { kind: 'point', ...p }])
-    }
-  }
-
-  const handleMouseMove = (e: ReactMouseEvent<HTMLDivElement>) => {
-    if (!isRegion || !dragStart) return
-    setDragCurrent(toPoint(e))
-  }
-
-  const handleMouseUp = (e: ReactMouseEvent<HTMLDivElement>) => {
-    if (!isRegion || !dragStart) return
-    const region = regionFromPoints(dragStart, toPoint(e))
-    if (region.width > 0.005 || region.height > 0.005) {
-      setMarks((prev) =>
-        prev.length >= interaction.maxMarks
-          ? prev
-          : [...prev, { kind: 'region', ...region }]
-      )
-    }
-    setDragStart(null)
-    setDragCurrent(null)
-  }
-
-  const liveRegion =
-    isRegion && dragStart && dragCurrent
-      ? regionFromPoints(dragStart, dragCurrent)
-      : null
-
+    return null
   return (
-    <ContainedImage src={content} alt={stimulus.code} regions={[]}>
-      {(rect) => (
-        <div
-          className="absolute cursor-crosshair select-none"
-          style={{
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height,
-          }}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={() => {
-            setDragStart(null)
-            setDragCurrent(null)
-          }}
-        >
-          {marks.map((m, i) =>
-            m.kind === 'point' ? (
+    <div data-workspace-completing={interactionRef}>
+      {realization.gapRealizations
+        .filter((gap) => gap.stimulusRealizationRef === realizationRef)
+        .map((gap) => {
+          if (gap.responsePlacement === 'Referenced')
+            return (
               <span
-                key={i}
-                className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground"
-                style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%` }}
+                className="qfd-affordance"
+                data-gap-ref={gap.gapRef}
+                key={gap.gapRef}
               >
-                ● {i + 1}
-              </span>
-            ) : (
-              <span
-                key={i}
-                className="pointer-events-none absolute border-2 border-primary bg-primary/20"
-                style={{
-                  left: `${m.x * 100}%`,
-                  top: `${m.y * 100}%`,
-                  width: `${m.width * 100}%`,
-                  height: `${m.height * 100}%`,
-                }}
-              >
-                <span className="absolute left-0 top-0 rounded-br bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
-                  Region {i + 1}
-                </span>
+                Response reference: {gap.gapRef}
               </span>
             )
-          )}
-          {liveRegion && (
-            <span
-              className="pointer-events-none absolute border-2 border-dashed border-primary bg-primary/10"
-              style={{
-                left: `${liveRegion.x * 100}%`,
-                top: `${liveRegion.y * 100}%`,
-                width: `${liveRegion.width * 100}%`,
-                height: `${liveRegion.height * 100}%`,
-              }}
-            />
-          )}
-          <p className="absolute bottom-1 left-1 rounded bg-background/85 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            {isRegion ? 'Drag to mark a region' : 'Click to mark'} ·{' '}
-            {marks.length}/{interaction.maxMarks}
-          </p>
-        </div>
-      )}
-    </ContainedImage>
+          if (gap.type === 'InputGapRealization')
+            return (
+              <input
+                className="qfd-affordance"
+                data-gap-ref={gap.gapRef}
+                data-response-placement="Embedded"
+                aria-label={`Complete ${gap.gapRef}`}
+                disabled={disabled}
+                key={gap.gapRef}
+                onChange={(event) =>
+                  updateGapResponse(
+                    responses,
+                    setResponse,
+                    interactionRef,
+                    gap.gapRef,
+                    event.currentTarget.value
+                  )
+                }
+              />
+            )
+          if (
+            gap.assignmentMode === 'ItemSelection' &&
+            gap.selectionPresentation
+          )
+            return (
+              <div
+                className="qfd-affordance"
+                data-gap-ref={gap.gapRef}
+                data-response-placement="Embedded"
+                key={gap.gapRef}
+              >
+                <CompletingItemSelection
+                  ctx={ctx}
+                  interactionRef={interactionRef}
+                  presentation={gap.selectionPresentation}
+                  gapRef={gap.gapRef}
+                  disabled={disabled}
+                />
+              </div>
+            )
+          const selectedItem = ui.completingItem[interactionRef]
+          return (
+            <button
+              type="button"
+              className="qfd-affordance"
+              data-gap-ref={gap.gapRef}
+              data-assignment-mode="DirectPlacement"
+              disabled={disabled || !selectedItem}
+              key={gap.gapRef}
+              onClick={() =>
+                updateGapResponse(
+                  responses,
+                  setResponse,
+                  interactionRef,
+                  gap.gapRef,
+                  selectedItem
+                )
+              }
+            >
+              Place selected item at {gap.gapRef}
+            </button>
+          )
+        })}
+    </div>
   )
 }
 
-// ── Dispatcher ───────────────────────────────────────────────────────────────
-
-export function InteractionWidget({
+function WorkspaceMarkingSurface({
   ctx,
-  interaction,
-  ir,
+  realization,
+  interactionRefs,
+  disabled,
 }: {
   ctx: RenderContext
-  interaction: ResponseInteraction
-  ir: InteractionRealization
+  realization: StimulusRealization
+  interactionRefs: readonly string[]
+  disabled: (interactionRef: string) => boolean
 }) {
-  switch (ir.mechanism) {
-    case 'ListSelection':
-      return <ListSelectionWidget interaction={interaction as Selecting} />
-    case 'SpatialSelection':
-      return null // choices are rendered as placed ResponseElementBlocks
-    case 'DirectOrdering':
-      return <DirectOrderingWidget interaction={interaction as Ordering} />
-    case 'OrderNotation':
-      return <OrderNotationWidget interaction={interaction as Ordering} />
-    case 'DirectRelationConstruction':
-      return <DirectRelationWidget interaction={interaction as Relating} />
-    case 'RelationNotation':
-      return <RelationNotationWidget interaction={interaction as Relating} />
-    case 'Completion':
-      return <CompletionWidget interaction={interaction as Completing} />
-    case 'ShortEntry':
-      return <ShortEntryWidget interaction={interaction as ShortInput} />
-    case 'ExtendedTextEntry':
-      return <ExtendedTextWidget interaction={interaction as Essay} />
-    case 'DigitalArtifactSubmission':
-      return <ArtifactWidget digital />
-    case 'PhysicalArtifactSubmission':
-      return <ArtifactWidget digital={false} />
-    case 'DirectMarking':
-      return <MarkingWidget ctx={ctx} interaction={interaction as Marking} />
+  const { setResponse } = useRuntimeProgress()
+  const [responses, setResponses] = useState<
+    Record<string, RendererMarkingResponse | undefined>
+  >({})
+  const regionStart = useRef<{ offsetX: number; offsetY: number } | null>(null)
+  const entries = interactionRefs.flatMap((interactionRef) => {
+    const interaction = ctx.interactions.get(interactionRef)
+    const qfdRealization = ctx.interactionRealizations.get(interactionRef)
+    return interaction?.type === 'Marking' &&
+      qfdRealization?.type === 'MarkingRealization'
+      ? [{ interaction, realization: qfdRealization }]
+      : []
+  })
+  const report = (interactionRef: string, next: RendererMarkingResponse) => {
+    setResponses((previous) => ({ ...previous, [interactionRef]: next }))
+    setResponse(interactionRef, next)
   }
+  const point = (event: MouseEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    entries.forEach(({ interaction, realization: marking }) => {
+      if (interaction.markType !== 'Point' || disabled(interaction.id)) return
+      const next = appendPointMark(
+        responses[interaction.id],
+        marking.workspaceRealizationRef,
+        event.clientX - bounds.left,
+        event.clientY - bounds.top
+      )
+      if (
+        interaction.maxMarks === undefined ||
+        next.marks.length <= interaction.maxMarks
+      )
+        report(interaction.id, next)
+    })
+  }
+  const textSpan = () => {
+    const selectedText =
+      typeof window === 'undefined'
+        ? ''
+        : (window.getSelection()?.toString() ?? '')
+    if (!selectedText.trim()) return
+    entries.forEach(({ interaction, realization: marking }) => {
+      if (interaction.markType !== 'TextSpan' || disabled(interaction.id))
+        return
+      const next = appendTextSpanMark(
+        responses[interaction.id],
+        marking.workspaceRealizationRef,
+        selectedText
+      )
+      if (
+        interaction.maxMarks === undefined ||
+        next.marks.length <= interaction.maxMarks
+      )
+        report(interaction.id, next)
+    })
+  }
+  const beginRegion = (event: MouseEvent<HTMLDivElement>) => {
+    if (!entries.some(({ interaction }) => interaction.markType === 'Region'))
+      return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    regionStart.current = {
+      offsetX: event.clientX - bounds.left,
+      offsetY: event.clientY - bounds.top,
+    }
+  }
+  const finishMark = (event: MouseEvent<HTMLDivElement>) => {
+    const start = regionStart.current
+    regionStart.current = null
+    if (start) {
+      const bounds = event.currentTarget.getBoundingClientRect()
+      entries.forEach(({ interaction, realization: marking }) => {
+        if (interaction.markType !== 'Region' || disabled(interaction.id))
+          return
+        const next = appendRegionMark(
+          responses[interaction.id],
+          marking.workspaceRealizationRef,
+          start.offsetX,
+          start.offsetY,
+          event.clientX - bounds.left,
+          event.clientY - bounds.top
+        )
+        if (
+          interaction.maxMarks === undefined ||
+          next.marks.length <= interaction.maxMarks
+        )
+          report(interaction.id, next)
+      })
+      return
+    }
+    textSpan()
+  }
+  return (
+    <div
+      data-renderer-marking-surface="true"
+      data-workspace-realization-ref={realization.id}
+      onClick={point}
+      onMouseDown={beginRegion}
+      onMouseUp={finishMark}
+    >
+      <StimulusContent ctx={ctx} realization={realization} />
+      {entries.map(({ interaction }) => (
+        <div
+          className="qfd-marking-guidance"
+          data-owner-interaction={interaction.id}
+          data-mark-type={interaction.markType}
+          key={interaction.id}
+        >
+          {interaction.markType === 'Point'
+            ? 'Click the workspace to place a point.'
+            : interaction.markType === 'Region'
+              ? 'Drag across the workspace to mark a renderer-local region.'
+              : 'Select text in the workspace to add a span.'}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function WorkspaceStimulus({
+  ctx,
+  realization,
+  visibleInteractionRefs,
+}: {
+  ctx: RenderContext
+  realization: StimulusRealization
+  visibleInteractionRefs: readonly string[]
+}) {
+  const { isAnswerable } = useRuntimeProgress()
+  const markingRefs = visibleInteractionRefs.filter(
+    (ref) => ctx.interactions.get(ref)?.type === 'Marking'
+  )
+  return (
+    <section
+      className="qfd-stimulus rounded-md border p-3"
+      data-sr-id={realization.id}
+      data-modality={realization.realizedModality}
+    >
+      {markingRefs.length > 0 ? (
+        <WorkspaceMarkingSurface
+          ctx={ctx}
+          realization={realization}
+          interactionRefs={markingRefs}
+          disabled={(ref) => !isAnswerable(ref)}
+        />
+      ) : (
+        <StimulusContent ctx={ctx} realization={realization} />
+      )}
+      {visibleInteractionRefs.map((interactionRef) => {
+        const type = ctx.interactions.get(interactionRef)?.type
+        if (type === 'Selecting')
+          return (
+            <WorkspaceSelectingControls
+              ctx={ctx}
+              realizationRef={realization.id}
+              interactionRef={interactionRef}
+              disabled={!isAnswerable(interactionRef)}
+              key={interactionRef}
+            />
+          )
+        if (type === 'Completing')
+          return (
+            <WorkspaceCompletingControls
+              ctx={ctx}
+              realizationRef={realization.id}
+              interactionRef={interactionRef}
+              disabled={!isAnswerable(interactionRef)}
+              key={interactionRef}
+            />
+          )
+        return null
+      })}
+    </section>
+  )
 }

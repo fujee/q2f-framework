@@ -30,8 +30,8 @@ describe('completion assignments', () => {
   })
 
   it('allows unlimited reuse', () => {
-    const one = assignCompletionItem({}, 'gap-1', 'co2', 'Unlimited')
-    const two = assignCompletionItem(one, 'gap-2', 'co2', 'Unlimited')
+    const one = assignCompletionItem({}, 'gap-1', 'co2', undefined)
+    const two = assignCompletionItem(one, 'gap-2', 'co2', undefined)
     expect(two['gap-1']).toBe('co2')
     expect(two['gap-2']).toBe('co2')
   })

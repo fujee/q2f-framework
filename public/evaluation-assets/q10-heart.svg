@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="560" viewBox="0 0 640 560" role="img" aria-label="Unlabelled schematic heart with four distinct chambers">
+  <rect width="640" height="560" fill="#fff"/>
+  <path d="M320 510C80 360 70 150 190 95c70-32 120 5 130 55 10-50 60-87 130-55 120 55 110 265-130 415Z" fill="#f5d3d3" stroke="#7f2828" stroke-width="8"/>
+  <path d="M320 150V465M145 280H495" stroke="#7f2828" stroke-width="8"/>
+  <path d="M228 94V20M412 94V20" stroke="#346b96" stroke-width="24"/>
+  <circle cx="230" cy="210" r="11" fill="#7f2828"/><circle cx="410" cy="210" r="11" fill="#7f2828"/>
+  <circle cx="230" cy="365" r="11" fill="#7f2828"/><circle cx="410" cy="365" r="11" fill="#7f2828"/>
+</svg>

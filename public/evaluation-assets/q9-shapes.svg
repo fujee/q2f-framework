@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260" role="img" aria-label="Triangle, circle, and square">
+  <rect width="720" height="260" fill="#fff"/>
+  <polygon points="120,45 40,215 200,215" fill="#e5ad42" stroke="#17211d" stroke-width="5"/>
+  <circle cx="360" cy="130" r="82" fill="#4c9b78" stroke="#17211d" stroke-width="5"/>
+  <rect x="530" y="48" width="164" height="164" fill="#5689c7" stroke="#17211d" stroke-width="5"/>
+</svg>

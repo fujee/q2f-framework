@@ -1,233 +1,265 @@
-import type { QuestionDefinition } from '../../../qd/model'
-import type { Inline, LayoutElement, QuestionFormDefinition } from '../../model'
-import { analyzeLayoutTree } from '../../layout'
-import { findOwningInteractionId } from '../../layout'
-import { type Finding, fail, pass } from '../../../shared/findings'
+import { fail, pass, type Finding } from '../../../shared/findings'
+import {
+  analyzeLayoutTree,
+  layoutableRefKey,
+  placementKeys,
+} from '../../layout'
+import type {
+  ElementPresentation,
+  InteractionRealization,
+  LayoutElement,
+  LayoutableRealizationRef,
+  QuestionFormDefinition,
+  SelectionPresentation,
+} from '../../model'
 
-const CONTAINER_KINDS = new Set(['Stack', 'Grid', 'Canvas', 'Inline'])
-
-/** QFD-VAL-LAY-001..006, STK-001, GRD-001, CAN-001..002, INL-001..003 — layout tree rules. */
-export function validateLayout(
-  qfd: QuestionFormDefinition,
-  qd: QuestionDefinition | undefined
-): Finding[] {
+export function validateLayout(qfd: QuestionFormDefinition): Finding[] {
   const findings: Finding[] = []
-  const root = qfd.rootLayout as unknown as LayoutElement
-
-  // QFD-VAL-LAY-001: exactly one root layout exists
+  const rootAnalysis = analyzeLayoutTree(qfd.rootLayout)
+  const rootShapeValid =
+    !rootAnalysis.hasCycle &&
+    !rootAnalysis.hasSharedNode &&
+    !rootAnalysis.hasEmptyGroup &&
+    validOrientations(qfd.rootLayout)
   findings.push(
-    root !== undefined && root !== null
-      ? pass('QFD-VAL-LAY-001', 'Exactly one root layout exists.')
-      : fail('QFD-VAL-LAY-001', 'QuestionFormDefinition has no root layout.')
-  )
-
-  // QFD-VAL-LAY-002: root layout is a ContainerElement
-  const rootIsContainer = Boolean(root) && CONTAINER_KINDS.has(root.kind)
-  findings.push(
-    rootIsContainer
-      ? pass('QFD-VAL-LAY-002', 'Root layout is a ContainerElement.')
-      : fail(
-          'QFD-VAL-LAY-002',
-          `Root layout must be a ContainerElement (Stack/Grid/Canvas/Inline), found '${root?.kind}'.`
-        )
-  )
-
-  if (!root) return findings
-
-  const { hasCycle, sharedNodes } = analyzeLayoutTree(root)
-
-  // QFD-VAL-LAY-003 / QFD-VAL-LAY-005: exactly one parent per non-root node / no shared node objects
-  findings.push(
-    sharedNodes.length === 0
+    rootShapeValid
       ? pass(
-          'QFD-VAL-LAY-003',
-          'Every non-root layout node has exactly one parent.'
+          'QFD-LAYOUT-001',
+          'rootLayout is a finite non-empty baseline layout tree.'
         )
       : fail(
-          'QFD-VAL-LAY-003',
-          `${sharedNodes.length} layout node object(s) are reachable from more than one parent.`
+          'QFD-LAYOUT-001',
+          'rootLayout must be acyclic, unshared, use baseline orientations, and contain no empty group.',
+          { path: 'rootLayout' }
         )
   )
+
+  const { independent, anchored } = collectOuterLayoutables(qfd)
+  const independentKeys = independent.map(layoutableRefKey)
+  const anchoredKeys = new Set(anchored.map(layoutableRefKey))
+  const placedKeys = placementKeys(qfd.rootLayout)
+  const placementValid =
+    new Set(independentKeys).size === independentKeys.length &&
+    placedKeys.length === independentKeys.length &&
+    placedKeys.every((key) => independentKeys.includes(key)) &&
+    independentKeys.every(
+      (key) => placedKeys.filter((placed) => placed === key).length === 1
+    ) &&
+    placedKeys.every((key) => !anchoredKeys.has(key))
   findings.push(
-    sharedNodes.length === 0
+    placementValid
       ? pass(
-          'QFD-VAL-LAY-005',
-          'No layout node object is shared under multiple parents.'
+          'QFD-LAYOUT-002',
+          'Outer layout positions every independent realization exactly once.'
         )
       : fail(
-          'QFD-VAL-LAY-005',
-          `${sharedNodes.length} layout node object(s) are shared under multiple parents.`
+          'QFD-LAYOUT-002',
+          'Outer placements must resolve to each independent realization exactly once and exclude anchored instances.',
+          { path: 'rootLayout' }
         )
   )
 
-  // QFD-VAL-LAY-004: layout contains no cycle
-  findings.push(
-    hasCycle
-      ? fail('QFD-VAL-LAY-004', 'The layout tree contains a cycle.')
-      : pass('QFD-VAL-LAY-004', 'The layout tree contains no cycle.')
-  )
-
-  if (hasCycle) return findings // further structural traversal would not terminate safely
-
-  // QFD-VAL-LAY-006 / STK-001 / GRD-001 / CAN-001..002 / INL-001..003 — per-node checks
-  let lay006Failed = false
-  let grdFailed = false
-  let canFailed = false
-  let canLayerFailed = false
-  let inlAnchorFailed = false
-  let inlUnambiguousFailed = false
-
-  function visit(node: LayoutElement): void {
-    if (node.kind === 'Stack') {
-      if (node.children.length === 0) lay006Failed = true
-      for (const child of node.children) visit(child)
-    } else if (node.kind === 'Grid') {
-      if (node.items.length === 0) lay006Failed = true
-      if (node.rows < 1 || node.columns < 1) grdFailed = true
-      for (const item of node.items) {
-        if (
-          item.row < 0 ||
-          item.column < 0 ||
-          item.rowSpan < 1 ||
-          item.columnSpan < 1 ||
-          item.row + item.rowSpan > node.rows ||
-          item.column + item.columnSpan > node.columns
-        ) {
-          grdFailed = true
-        }
-        visit(item.child)
-      }
-    } else if (node.kind === 'Canvas') {
-      if (node.items.length === 0) lay006Failed = true
-      for (const item of node.items) {
-        const { x, y, width, height } = item.area
-        const valid =
-          x >= 0 &&
-          x < 1 &&
-          y >= 0 &&
-          y < 1 &&
-          width > 0 &&
-          width <= 1 &&
-          height > 0 &&
-          height <= 1 &&
-          x + width <= 1 &&
-          y + height <= 1
-        if (!valid) canFailed = true
-        if (!Number.isInteger(item.layer)) canLayerFailed = true
-        visit(item.child)
-      }
-    } else if (node.kind === 'Inline') {
-      if (node.items.length === 0) lay006Failed = true
-      for (const item of node.items) {
-        if (
-          item.anchor &&
-          (item.anchor.kind !== 'TextAnchor' ||
-            item.anchor.marker.trim().length === 0)
-        ) {
-          inlAnchorFailed = true
-        }
-        if (
-          item.child.kind === 'ResponseElementBlock' &&
-          item.child.elementKind === 'CompletingGap' &&
-          qd &&
-          !isUnambiguousTextWorkspace(qd, node as Inline, item.child.elementRef)
-        ) {
-          inlUnambiguousFailed = true
-        }
-        visit(item.child)
-      }
-    }
+  for (const composite of collectLocalComposites(qfd.interactionRealizations)) {
+    findings.push(
+      validateLocalComposite(composite.id, composite.layout, composite.owned)
+    )
   }
-  visit(root)
-
-  findings.push(
-    lay006Failed
-      ? fail(
-          'QFD-VAL-LAY-006',
-          'One or more container nodes have no children/items.'
-        )
-      : pass('QFD-VAL-LAY-006', 'Every container node is non-empty.')
-  )
-  findings.push(
-    pass(
-      'QFD-VAL-STK-001',
-      'Stack children are explicitly ordered by array position.'
-    )
-  )
-  findings.push(
-    grdFailed
-      ? fail(
-          'QFD-VAL-GRD-001',
-          'One or more Grid nodes have invalid rows/columns/spans or items outside the declared grid.'
-        )
-      : pass(
-          'QFD-VAL-GRD-001',
-          'All Grid rows/columns/spans are valid and items fit the declared grid.'
-        )
-  )
-  findings.push(
-    canFailed
-      ? fail(
-          'QFD-VAL-CAN-001',
-          'One or more Canvas areas lie outside the normalized unit space.'
-        )
-      : pass(
-          'QFD-VAL-CAN-001',
-          'All Canvas areas are valid normalized regions inside the unit space.'
-        )
-  )
-  findings.push(
-    canLayerFailed
-      ? fail(
-          'QFD-VAL-CAN-002',
-          'One or more Canvas items declare a non-integer layer.'
-        )
-      : pass('QFD-VAL-CAN-002', 'All Canvas item layers are integers.')
-  )
-  findings.push(
-    pass(
-      'QFD-VAL-INL-001',
-      'Inline items are explicitly ordered by array position.'
-    )
-  )
-  findings.push(
-    inlAnchorFailed
-      ? fail(
-          'QFD-VAL-INL-002',
-          'One or more InlineItem anchors are not valid TextAnchors.'
-        )
-      : pass(
-          'QFD-VAL-INL-002',
-          'All declared InlineItem anchors are valid TextAnchors.'
-        )
-  )
-  findings.push(
-    inlUnambiguousFailed
-      ? fail(
-          'QFD-VAL-INL-003',
-          'An Inline-placed response element corresponds to an ambiguous QD text Workspace pair.'
-        )
-      : pass(
-          'QFD-VAL-INL-003',
-          'Inline-placed response elements correspond to an unambiguous QD text Workspace pair.'
-        )
-  )
-
   return findings
 }
 
-function isUnambiguousTextWorkspace(
-  qd: QuestionDefinition,
-  _inline: Inline,
-  gapRef: string
-): boolean {
-  const owner = findOwningInteractionId(qd, 'CompletingGap', gapRef)
-  if (!owner) return true // reported elsewhere (dangling ref)
-  const textWorkspaces = qd.interactionStimulusAssociations.filter(
-    (a) =>
-      a.interactionRef === owner &&
-      a.role === 'Workspace' &&
-      qd.stimuli.find((s) => s.id === a.stimulusRef)?.type === 'Text'
+function validateLocalComposite(
+  id: string,
+  layout: LayoutElement,
+  owned: ElementPresentation[]
+): Finding {
+  const analysis = analyzeLayoutTree(layout)
+  const ownedKeys = owned.map(({ id: elementId }) =>
+    layoutableRefKey(ref('ElementPresentation', elementId))
   )
-  return textWorkspaces.length <= 1
+  const placedKeys = placementKeys(layout)
+  const valid =
+    !analysis.hasCycle &&
+    !analysis.hasSharedNode &&
+    !analysis.hasEmptyGroup &&
+    validOrientations(layout) &&
+    new Set(ownedKeys).size === ownedKeys.length &&
+    placedKeys.length === ownedKeys.length &&
+    placedKeys.every((key) => ownedKeys.includes(key)) &&
+    ownedKeys.every(
+      (key) => placedKeys.filter((placed) => placed === key).length === 1
+    )
+  return valid
+    ? pass(
+        'QFD-LAYOUT-003',
+        `Composite '${id}' localLayout covers exactly its owned presentations.`
+      )
+    : fail(
+        'QFD-LAYOUT-003',
+        `Composite '${id}' localLayout must contain all and only its owned ElementPresentations exactly once.`,
+        { path: `localLayouts[${id}]` }
+      )
+}
+
+function collectOuterLayoutables(qfd: QuestionFormDefinition): {
+  independent: LayoutableRealizationRef[]
+  anchored: LayoutableRealizationRef[]
+} {
+  const independent: LayoutableRealizationRef[] = qfd.stimulusRealizations.map(
+    ({ id }) => ref('StimulusRealization', id)
+  )
+  const anchored: LayoutableRealizationRef[] = []
+
+  for (const realization of qfd.interactionRealizations) {
+    independent.push(
+      ...realization.instructionRealizations.map(({ id }) =>
+        ref('InstructionRealization', id)
+      )
+    )
+    switch (realization.type) {
+      case 'SelectingRealization':
+        if (realization.standaloneSelection)
+          independent.push(
+            ref('SelectionPresentation', realization.standaloneSelection.id)
+          )
+        for (const workspace of realization.workspaceRealizations) {
+          if (workspace.referencedResponseSite)
+            independent.push(
+              ref(
+                'ResponseSiteRealization',
+                workspace.referencedResponseSite.id
+              )
+            )
+        }
+        break
+      case 'OrderingRealization':
+        independent.push(
+          ref('OrderingPresentation', realization.presentation.id)
+        )
+        break
+      case 'RelatingRealization':
+        independent.push(
+          ref('RelatingSetPresentation', realization.sourceSetPresentation.id),
+          ref('RelatingSetPresentation', realization.targetSetPresentation.id)
+        )
+        if (realization.notationResponseSite)
+          independent.push(
+            ref('ResponseSiteRealization', realization.notationResponseSite.id)
+          )
+        break
+      case 'CompletingRealization':
+        if (realization.itemSource)
+          independent.push(
+            ref('CompletingItemSourceRealization', realization.itemSource.id)
+          )
+        for (const gap of realization.gapRealizations) {
+          if (gap.type === 'InputGapRealization') {
+            const target = ref('ResponseSiteRealization', gap.responseSite.id)
+            if (gap.responsePlacement === 'Referenced') independent.push(target)
+            else anchored.push(target)
+          } else if (gap.assignmentMode === 'ItemSelection') {
+            if (gap.selectionPresentation) {
+              const target = ref(
+                'SelectionPresentation',
+                gap.selectionPresentation.id
+              )
+              if (gap.responsePlacement === 'Referenced')
+                independent.push(target)
+              else anchored.push(target)
+            }
+          } else if (gap.referencedPlacementSite) {
+            independent.push(
+              ref('ResponseSiteRealization', gap.referencedPlacementSite.id)
+            )
+          }
+        }
+        break
+      case 'ShortInputRealization':
+      case 'EssayRealization':
+        independent.push(
+          ref('ResponseSiteRealization', realization.responseSite.id)
+        )
+        break
+      case 'ArtifactSubmissionRealization':
+        independent.push(
+          ref('ResponseSiteRealization', realization.submissionSite.id)
+        )
+        break
+      case 'MarkingRealization':
+        break
+    }
+  }
+  return { independent, anchored }
+}
+
+function collectLocalComposites(
+  realizations: InteractionRealization[]
+): Array<{ id: string; layout: LayoutElement; owned: ElementPresentation[] }> {
+  const composites: Array<{
+    id: string
+    layout: LayoutElement
+    owned: ElementPresentation[]
+  }> = []
+  const addSelection = (selection: SelectionPresentation | undefined) => {
+    if (selection)
+      composites.push({
+        id: selection.id,
+        layout: selection.localLayout,
+        owned: selection.optionPresentations,
+      })
+  }
+  for (const realization of realizations) {
+    switch (realization.type) {
+      case 'SelectingRealization':
+        addSelection(realization.standaloneSelection)
+        break
+      case 'OrderingRealization':
+        composites.push({
+          id: realization.presentation.id,
+          layout: realization.presentation.localLayout,
+          owned: realization.presentation.itemPresentations,
+        })
+        break
+      case 'RelatingRealization':
+        for (const presentation of [
+          realization.sourceSetPresentation,
+          realization.targetSetPresentation,
+        ])
+          composites.push({
+            id: presentation.id,
+            layout: presentation.localLayout,
+            owned: presentation.elementPresentations,
+          })
+        break
+      case 'CompletingRealization':
+        if (realization.itemSource)
+          composites.push({
+            id: realization.itemSource.id,
+            layout: realization.itemSource.localLayout,
+            owned: realization.itemSource.itemPresentations,
+          })
+        realization.gapRealizations.forEach((gap) => {
+          if (gap.type === 'ItemGapRealization')
+            addSelection(gap.selectionPresentation)
+        })
+        break
+      default:
+        break
+    }
+  }
+  return composites
+}
+
+function validOrientations(root: LayoutElement): boolean {
+  if (root.kind === 'LayoutPlacement') return true
+  return (
+    ['Horizontal', 'Vertical'].includes(root.orientation) &&
+    root.children.every(validOrientations)
+  )
+}
+
+function ref(
+  kind: LayoutableRealizationRef['kind'],
+  id: string
+): LayoutableRealizationRef {
+  return { kind, id }
 }

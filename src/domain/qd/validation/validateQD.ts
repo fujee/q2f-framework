@@ -22,8 +22,7 @@ import {
   type ValidationResult,
 } from './types'
 
-/** Runs the full QD-FB-2.1 validation rule catalog against a QuestionDefinition and
- * returns every Finding produced, plus the binary PASS/FAIL aggregate (Section 3.1). */
+/** Validates internal consistency of the stabilized scientific QD model. */
 export function validateQD(qd: QuestionDefinition): ValidationResult {
   const index = new QdIndex(qd)
   const findings: Finding[] = []
@@ -42,7 +41,7 @@ export function validateQD(qd: QuestionDefinition): ValidationResult {
         findings.push(...validateRelating(interaction))
         break
       case 'Completing':
-        findings.push(...validateCompleting(interaction, index))
+        findings.push(...validateCompleting(interaction))
         break
       case 'ShortInput':
         findings.push(...validateShortInput(interaction))

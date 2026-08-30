@@ -1,82 +1,38 @@
 import type { Stimulus } from '../../model'
+import { hasConcreteContent } from '../../implementation/contentCarrier'
 import { type Finding, fail, pass } from '../types'
 
-/** STM — Stimulus rules (STM-001..004). */
 export function validateStimulus(stimulus: Stimulus): Finding[] {
+  const path = `stimuli[${stimulus.id}]`
   const findings: Finding[] = []
-  const path = `stimuli[${stimulus.code}]`
-
-  const hasConcreteContent =
-    stimulus.type === 'Text'
-      ? Boolean(stimulus.content?.trim())
-      : Boolean(stimulus.source?.trim())
-  const hasContentSpecification = Boolean(stimulus.contentSpecification?.trim())
-
-  if (stimulus.materializationPolicy === 'Fixed') {
-    // STM-001: Fixed requires concrete content/source
-    findings.push(
-      hasConcreteContent
-        ? pass(
-            'STM-001',
-            `Fixed Stimulus '${stimulus.code}' declares concrete content.`
-          )
-        : fail(
-            'STM-001',
-            `Fixed Stimulus '${stimulus.code}' must declare concrete content/source.`,
-            { path }
-          )
-    )
-  } else if (stimulus.materializationPolicy === 'Adaptable') {
-    // STM-002: Adaptable requires concrete content/source AND a contentSpecification
-    findings.push(
-      hasConcreteContent && hasContentSpecification
-        ? pass(
-            'STM-002',
-            `Adaptable Stimulus '${stimulus.code}' declares concrete content and a contentSpecification.`
-          )
-        : fail(
-            'STM-002',
-            `Adaptable Stimulus '${stimulus.code}' must declare concrete content/source AND a contentSpecification.`,
-            { path }
-          )
-    )
-  } else {
-    // STM-003: SpecificationBased requires a contentSpecification; concrete content/source is optional
-    findings.push(
-      hasContentSpecification
-        ? pass(
-            'STM-003',
-            `SpecificationBased Stimulus '${stimulus.code}' declares a contentSpecification.`
-          )
-        : fail(
-            'STM-003',
-            `SpecificationBased Stimulus '${stimulus.code}' must declare a contentSpecification.`,
-            { path }
-          )
-    )
-  }
-
-  // STM-004: response-relevant supplemental content, if declared, must not be an empty string.
-  // Whether a transcript/caption is *needed* is an authoring judgment this engine cannot infer.
-  if (
-    stimulus.transcript === undefined ||
-    stimulus.transcript.trim().length > 0
-  ) {
-    findings.push(
-      pass(
-        'STM-004',
-        `Stimulus '${stimulus.code}' supplemental content (if any) is well-formed.`
-      )
-    )
-  } else {
-    findings.push(
-      fail(
-        'STM-004',
-        `Stimulus '${stimulus.code}' declares an empty transcript/caption.`,
-        { path }
-      )
-    )
-  }
-
+  const modalitiesValid =
+    stimulus.allowedModalities.length > 0 &&
+    new Set(stimulus.allowedModalities).size ===
+      stimulus.allowedModalities.length
+  findings.push(
+    modalitiesValid
+      ? pass('STM-001', 'Stimulus declares a non-empty modality set.')
+      : fail('STM-001', 'allowedModalities must be a non-empty set.', { path })
+  )
+  const hasSource = hasConcreteContent(stimulus.sourceContent)
+  const hasSpecification = Boolean(stimulus.contentSpecification?.trim())
+  const policyValid =
+    (stimulus.materializationPolicy === 'Fixed' && hasSource) ||
+    (stimulus.materializationPolicy === 'Adaptable' &&
+      hasSource &&
+      hasSpecification) ||
+    (stimulus.materializationPolicy === 'SpecificationBased' &&
+      hasSpecification)
+  findings.push(
+    policyValid
+      ? pass('STM-002', 'Stimulus materialization inputs satisfy its policy.')
+      : fail(
+          'STM-002',
+          'Stimulus sourceContent/contentSpecification do not satisfy its materializationPolicy.',
+          {
+            path,
+          }
+        )
+  )
   return findings
 }

@@ -1,154 +1,190 @@
-import type { QuestionDefinition } from '../../qd/model'
-import type { QuestionFormDefinition, QuestionFormProfile } from '../model'
-import { maxPosition, minPosition, presentationPositions } from '../layout'
-import { type Finding, fail, pass, warning } from '../../shared/findings'
+import type { DependencyConstraint, QuestionDefinition } from '../../qd/model'
+import { fail, pass, warning, type Finding } from '../../shared/findings'
+import type { QuestionFormDefinition } from '../model'
+import { dependencyEvidenceKey, type ConformanceEvidence } from './evidence'
 
-/** CONF-SEQ-001..002, CONF-DEP-001..005. */
-export function validateSequenceConformance(
+export function validateSequenceAndDependencyConformance(
   qd: QuestionDefinition,
   qfd: QuestionFormDefinition,
-  profile: QuestionFormProfile
+  evidence: ConformanceEvidence = {}
+): Finding[] {
+  return [
+    validateSequence(qd, qfd),
+    ...validateDependencies(qd, qfd),
+    ...validateDependencyExposure(qd, qfd, evidence),
+  ]
+}
+
+function validateDependencyExposure(
+  qd: QuestionDefinition,
+  qfd: QuestionFormDefinition,
+  evidence: ConformanceEvidence
+): Finding[] {
+  const strengths = new Map(
+    [...normalizeQdDependencies(qd).entries()].map(([key, dependency]) => [
+      key,
+      dependency.strength,
+    ])
+  )
+  return qfd.dependencyRealizations.flatMap((dependency) => {
+    if (dependency.exposurePolicy !== 'ConcealedUntilSatisfied') return []
+    const key = dependencyEvidenceKey(dependency)
+    if (evidence.prematurelyExposedDependencyKeys?.has(key))
+      return [
+        strengths.get(key) === 'Preferred'
+          ? warning(
+              'CONF-DEP-EXP-001',
+              `Preferred dependency '${key}' prematurely exposes successor-specific units.`
+            )
+          : fail(
+              'CONF-DEP-EXP-001',
+              `Required dependency '${key}' prematurely exposes successor-specific units.`
+            ),
+      ]
+    if (evidence.verifiedConcealedDependencyKeys?.has(key))
+      return [
+        pass(
+          'CONF-DEP-EXP-001',
+          `Successor-specific units for '${key}' remain concealed; shared content may remain visible.`
+        ),
+      ]
+    return []
+  })
+}
+
+function validateSequence(
+  qd: QuestionDefinition,
+  qfd: QuestionFormDefinition
+): Finding {
+  const requiredEdges: Edge[] = qd.constraints.flatMap((constraint) => {
+    if (constraint.type !== 'Sequence') return []
+    return constraint.interactionRefs.slice(0, -1).map((from, index) => ({
+      from,
+      to: constraint.interactionRefs[index + 1],
+    }))
+  })
+  const requiredOrder = transitiveClosure(requiredEdges)
+  const realizedOrder = transitiveClosure(
+    qfd.interactionPrecedences.map(
+      ({ beforeInteractionRef: from, afterInteractionRef: to }) => ({
+        from,
+        to,
+      })
+    )
+  )
+  const preserved = [...requiredOrder].every((edge) => realizedOrder.has(edge))
+  return preserved
+    ? pass(
+        'CONF-SEQ-001',
+        'QFD InteractionPrecedence transitively preserves every QD Sequence relation.'
+      )
+    : fail(
+        'CONF-SEQ-001',
+        'QFD InteractionPrecedence omits or contradicts a required QD Sequence relation.'
+      )
+}
+
+function validateDependencies(
+  qd: QuestionDefinition,
+  qfd: QuestionFormDefinition
 ): Finding[] {
   const findings: Finding[] = []
-  const positions = presentationPositions(qd, qfd)
-
-  const precedes = (a: string, b: string): boolean | undefined => {
-    const maxA = maxPosition(positions, a)
-    const minB = minPosition(positions, b)
-    if (maxA === undefined || minB === undefined) return undefined
-    return maxA < minB
-  }
-
-  for (const constraint of qd.constraints) {
-    if (constraint.type === 'Sequence') {
-      let allOk = true
-      for (let i = 0; i < constraint.interactionRefs.length - 1; i++) {
-        const ok = precedes(
-          constraint.interactionRefs[i],
-          constraint.interactionRefs[i + 1]
-        )
-        if (ok === false) allOk = false
-      }
-      if (constraint.strength === 'Required') {
-        findings.push(
-          allOk
-            ? pass(
-                'CONF-SEQ-001',
-                `Required sequence '${constraint.id}' is preserved by logical presentation order.`,
-                {
-                  affectedIds: [constraint.id],
-                }
-              )
-            : fail(
-                'CONF-SEQ-001',
-                `Required sequence '${constraint.id}' is violated by logical presentation order.`,
-                {
-                  affectedIds: [constraint.id],
-                }
-              )
-        )
-      } else if (!allOk) {
-        findings.push(
-          warning(
-            'CONF-SEQ-002',
-            `Preferred sequence '${constraint.id}' is violated by logical presentation order.`,
-            {
-              affectedIds: [constraint.id],
-            }
-          )
-        )
-      }
-    } else {
-      const predIr = qfd.interactionRealizations.find(
-        (ir) => ir.interactionRef === constraint.predecessorInteractionRef
-      )
-      const succIr = qfd.interactionRealizations.find(
-        (ir) => ir.interactionRef === constraint.successorInteractionRef
-      )
-
-      // CONF-DEP-001: predecessor and successor have valid InteractionRealization objects
+  const qdDependencies = normalizeQdDependencies(qd)
+  const qfdDependencies = new Map(
+    qfd.dependencyRealizations.map((dependency) => [
+      dependencyKey(dependency),
+      dependency,
+    ])
+  )
+  for (const [key, dependency] of qdDependencies) {
+    const realized = qfdDependencies.has(key)
+    if (dependency.strength === 'Required')
       findings.push(
-        predIr && succIr
+        realized
           ? pass(
-              'CONF-DEP-001',
-              `Dependency '${constraint.id}' predecessor/successor both have InteractionRealizations.`,
-              {
-                affectedIds: [constraint.id],
-              }
+              'CONF-DEP-REQ-001',
+              `Required dependency '${key}' is preserved.`
             )
           : fail(
-              'CONF-DEP-001',
-              `Dependency '${constraint.id}' predecessor/successor is missing an InteractionRealization.`,
-              {
-                affectedIds: [constraint.id],
-              }
+              'CONF-DEP-REQ-001',
+              `Required dependency '${key}' is missing or mismatched.`
             )
       )
-
-      // CONF-DEP-002: dependency presentation preserves predecessor-before-successor order
-      const order = precedes(
-        constraint.predecessorInteractionRef,
-        constraint.successorInteractionRef
-      )
+    else
       findings.push(
-        order === true
+        realized
           ? pass(
-              'CONF-DEP-002',
-              `Dependency '${constraint.id}' presentation preserves predecessor-before-successor order.`,
-              {
-                affectedIds: [constraint.id],
-              }
+              'CONF-DEP-PREF-001',
+              `Preferred dependency '${key}' is preserved.`
             )
-          : fail(
-              'CONF-DEP-002',
-              `Dependency '${constraint.id}' presentation does not preserve predecessor-before-successor order.`,
-              {
-                affectedIds: [constraint.id],
-              }
+          : warning(
+              'CONF-DEP-PREF-001',
+              `Preferred dependency '${key}' is omitted.`
             )
       )
-
-      const supported = profile.supportedDependencyCapabilities.has(
-        constraint.rule
-      )
-      if (constraint.strength === 'Required') {
-        if (supported) {
-          // CONF-DEP-003: profile supports the Required dependency -> renderer/runtime enforces it directly from QD
-          findings.push(
-            pass(
-              'CONF-DEP-003',
-              `Profile '${profile.id}' supports Required dependency '${constraint.rule}'; enforced directly from QD.`,
-              {
-                affectedIds: [constraint.id],
-              }
-            )
-          )
-        } else {
-          // CONF-DEP-004: unsupported Required dependency -> FAIL for this concrete form
-          findings.push(
-            fail(
-              'CONF-DEP-004',
-              `Profile '${profile.id}' does not support Required dependency '${constraint.rule}'.`,
-              {
-                affectedIds: [constraint.id],
-              }
-            )
-          )
-        }
-      } else if (!supported) {
-        // CONF-DEP-005: unsupported Preferred dependency -> WARNING
-        findings.push(
-          warning(
-            'CONF-DEP-005',
-            `Profile '${profile.id}' does not support Preferred dependency '${constraint.rule}'.`,
-            {
-              affectedIds: [constraint.id],
-            }
-          )
-        )
-      }
-    }
   }
-
+  for (const [key] of qfdDependencies) {
+    if (qdDependencies.has(key)) continue
+    findings.push(
+      fail(
+        'CONF-DEP-EXTRA-001',
+        `QFD dependency '${key}' has no QD semantic basis.`
+      )
+    )
+  }
   return findings
+}
+
+interface Edge {
+  from: string
+  to: string
+}
+
+function transitiveClosure(edges: Edge[]): Set<string> {
+  const nodes = new Set(edges.flatMap(({ from, to }) => [from, to]))
+  const reachable = new Map<string, Set<string>>(
+    [...nodes].map((node) => [node, new Set<string>()])
+  )
+  edges.forEach(({ from, to }) => reachable.get(from)?.add(to))
+  for (const through of nodes)
+    for (const from of nodes)
+      if (reachable.get(from)?.has(through))
+        reachable.get(through)?.forEach((to) => reachable.get(from)?.add(to))
+  return new Set(
+    [...reachable].flatMap(([from, targets]) =>
+      [...targets].map((to) => edgeKey(from, to))
+    )
+  )
+}
+
+function normalizeQdDependencies(
+  qd: QuestionDefinition
+): Map<string, DependencyConstraint> {
+  const normalized = new Map<string, DependencyConstraint>()
+  for (const constraint of qd.constraints) {
+    if (constraint.type !== 'Dependency') continue
+    const key = dependencyKey(constraint)
+    const existing = normalized.get(key)
+    if (!existing || constraint.strength === 'Required')
+      normalized.set(key, constraint)
+  }
+  return normalized
+}
+
+function dependencyKey(dependency: {
+  predecessorInteractionRef: string
+  successorInteractionRef: string
+  rule: DependencyConstraint['rule']
+  exposurePolicy: DependencyConstraint['exposurePolicy']
+}): string {
+  return [
+    dependency.predecessorInteractionRef,
+    dependency.successorInteractionRef,
+    dependency.rule,
+    dependency.exposurePolicy,
+  ].join('::')
+}
+
+function edgeKey(from: string, to: string): string {
+  return `${from}::${to}`
 }

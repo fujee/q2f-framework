@@ -1,545 +1,265 @@
-import type { QuestionDefinition } from '@/domain/qd/model'
+import type { QuestionDefinition, ResponseInteraction } from '@/domain/qd/model'
 import type {
-  Canvas,
-  CanvasItem,
-  ContentElement,
-  Grid,
-  Inline,
+  ElementPresentation,
   LayoutElement,
   QuestionFormDefinition,
-  Stack,
+  StimulusRealization,
 } from '@/domain/qfd/model'
-import { findOwningInteractionId } from '@/domain/qfd/layout'
-import { CANVAS_BASE_HEIGHT_PX } from './canvasLayout'
 import {
-  anchoredCanvasGapPlacements,
+  anchoredAffordances,
   buildRenderContext,
-  interactionBlockRendersWidget,
-  isQdAnchoredGap,
+  indexedLayoutable,
   resolveRealizedStimulusContent,
+  type IndexedLayoutable,
   type RenderContext,
 } from './renderContext'
 
 export function escapeHtml(value: string): string {
   return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
 }
 
-/** Self-contained styling for the exported fragment (no Tailwind dependency). */
 export const FRAGMENT_STYLE = `
-.qfd-root,.qfd-stack,.qfd-grid,.qfd-canvas,.qfd-inline{font-family:ui-sans-serif,system-ui,sans-serif;color:#111;font-size:14px;line-height:1.5}
-.qfd-stack{display:flex;gap:12px}
-.qfd-text{white-space:pre-wrap}
-.qfd-instruction{margin-bottom:8px;color:#333;max-width:70ch}
-.qfd-code{font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;color:#555;margin-right:5px}
-.qfd-list{display:flex;flex-direction:column;gap:6px}
-.qfd-option{display:flex;align-items:center;gap:6px}
-.qfd-img,.qfd-video{max-width:100%;max-height:320px;border-radius:6px}
-.qfd-audio{width:100%}
-.qfd-chip{display:inline-block;border:1px solid #bbb;border-radius:999px;padding:3px 10px;background:#fff;white-space:nowrap}
-.qfd-item-img{display:block;height:40px;width:40px;object-fit:contain;border-radius:4px}
-.qfd-blank{display:inline-block;min-width:110px;border-bottom:1px solid #555;vertical-align:baseline}
-.qfd-blank-sm{min-width:48px}
-.qfd-dropzone{display:inline-block;box-sizing:border-box;min-width:110px;min-height:28px;border:1.5px dashed #8a8a8a;border-radius:6px;background:rgba(255,255,255,0.88);text-align:center;vertical-align:middle;box-shadow:0 0 0 2px rgba(255,255,255,0.45)}
-.qfd-dropzone-fill{display:flex;align-items:center;justify-content:center;width:100%;height:100%;min-width:0;min-height:0}
-.qfd-bank{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
-.qfd-bank-label{font-size:11px;color:#555;margin-right:2px}
-.qfd-essay{border:1px solid #999;border-radius:4px;min-height:110px}
-.qfd-artifact{border:2px dashed #aaa;border-radius:6px;padding:22px;text-align:center;color:#555}
-.qfd-artifact-note{border:1px solid #999;border-radius:6px;padding:14px;text-align:center;color:#333;font-size:13px}
-.qfd-mark{position:relative;display:inline-block}
-.qfd-mark-hint{position:absolute;bottom:6px;left:6px;background:rgba(255,255,255,.85);padding:2px 6px;border-radius:4px;font-size:11px;color:#555}
-.qfd-missing{color:#b00}
-.qfd-relate{display:flex;gap:40px}
-.qfd-inline{line-height:2.2}
-.qfd-canvas{position:relative;overflow:hidden;border:1px dashed #bbb;border-radius:6px;box-sizing:border-box}
-.qfd-canvas-item{position:absolute;overflow:hidden;box-sizing:border-box}
-.qfd-canvas-text{width:100%;height:100%;overflow:auto;white-space:pre-wrap;font-size:13px}
-.qfd-canvas-img{width:100%;height:100%;object-fit:contain;display:block}
-.qfd-order{margin:0;padding-left:22px}
-.qfd-option-row{display:flex;align-items:center;gap:6px;padding:2px 0}
+.qfd-layout { display:flex; gap:1rem; align-items:stretch; }
+.qfd-layout-horizontal { flex-direction:row; }
+.qfd-layout-vertical { flex-direction:column; }
+.qfd-instruction { font-weight:600; }
+.qfd-operational-guidance { color:#475569; }
+.qfd-stimulus { border:1px solid #cbd5e1; border-radius:.5rem; padding:1rem; }
+.qfd-stimulus img { max-width:100%; height:auto; }
+.qfd-options, .qfd-elements { display:flex; flex-wrap:wrap; gap:.5rem; }
+.qfd-option, .qfd-element, .qfd-affordance { border:1px solid #94a3b8; border-radius:.35rem; padding:.45rem .65rem; }
+.qfd-response-site { min-height:2.25rem; border:1px dashed #64748b; border-radius:.35rem; padding:.45rem; }
+.qfd-item-source { border-top:1px solid #cbd5e1; padding-top:.5rem; }
 `
 
-function substituteMarkers(
-  text: string,
-  replacements: { marker: string; html: string }[]
+export class StaticDependencyUnsupportedError extends Error {
+  constructor() {
+    super(
+      'Static HTML export cannot execute QFD dependency realizations; use the interactive renderer.'
+    )
+    this.name = 'StaticDependencyUnsupportedError'
+  }
+}
+
+function interactionForElement(
+  ctx: RenderContext,
+  element: ElementPresentation
+): ResponseInteraction | undefined {
+  return ctx.interactions.get(element.elementRef.interactionRef)
+}
+
+function elementText(ctx: RenderContext, element: ElementPresentation): string {
+  if (element.realizedText !== undefined) return element.realizedText
+  const interaction = interactionForElement(ctx, element)
+  if (!interaction) return element.id
+  switch (element.elementRef.kind) {
+    case 'Choice': {
+      const choiceRef = element.elementRef.choiceRef
+      return interaction.type === 'Selecting'
+        ? (interaction.choices.find((choice) => choice.id === choiceRef)
+            ?.semanticContent ?? choiceRef)
+        : choiceRef
+    }
+    case 'OrderingItem': {
+      const orderingItemRef = element.elementRef.orderingItemRef
+      return interaction.type === 'Ordering'
+        ? (interaction.orderingItems.find((item) => item.id === orderingItemRef)
+            ?.semanticContent ?? orderingItemRef)
+        : orderingItemRef
+    }
+    case 'RelatingElement': {
+      const relatingElementRef = element.elementRef.relatingElementRef
+      if (interaction.type !== 'Relating') return relatingElementRef
+      const set =
+        element.elementRef.set === 'Source'
+          ? interaction.sourceSet
+          : interaction.targetSet
+      return (
+        set.relatingElements.find(
+          (candidate) => candidate.id === relatingElementRef
+        )?.semanticContent ?? relatingElementRef
+      )
+    }
+    case 'CompletingItem': {
+      const completingItemRef = element.elementRef.completingItemRef
+      return interaction.type === 'Completing'
+        ? (interaction.completingItems.find(
+            (item) => item.id === completingItemRef
+          )?.semanticContent ?? completingItemRef)
+        : completingItemRef
+    }
+  }
+}
+
+function renderElement(
+  ctx: RenderContext,
+  element: ElementPresentation
 ): string {
-  if (replacements.length === 0) return escapeHtml(text).replace(/\n/g, '<br/>')
-  const escaped = replacements.map((r) =>
-    r.marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  )
-  const regex = new RegExp(`(${escaped.join('|')})`, 'g')
-  return text
-    .split(regex)
-    .map((piece) => {
-      const match = replacements.find((r) => r.marker === piece)
-      return match ? match.html : escapeHtml(piece)
+  return `<span class="qfd-element" data-element-id="${escapeHtml(element.id)}">${escapeHtml(elementText(ctx, element))}</span>`
+}
+
+function renderStimulus(
+  ctx: RenderContext,
+  realization: StimulusRealization
+): string {
+  const stimulus = ctx.stimuli.get(realization.stimulusRef)
+  if (!stimulus) return ''
+  const content = resolveRealizedStimulusContent(stimulus, realization)
+  let body =
+    '<div class="qfd-stimulus-content-unavailable">Content unavailable</div>'
+  if (content) {
+    const escaped = escapeHtml(content)
+    switch (realization.realizedModality) {
+      case 'Text':
+        body = `<div class="qfd-stimulus-content">${escaped}</div>`
+        break
+      case 'Image':
+        body = `<img src="${escaped}" alt="" />`
+        break
+      case 'Audio':
+        body = `<audio controls src="${escaped}"></audio>`
+        break
+      case 'Video':
+        body = `<video controls src="${escaped}"></video>`
+        break
+    }
+  }
+  const affordances = anchoredAffordances(ctx, realization.id)
+    .map((affordance) => {
+      const label = affordance.elementRef
+        ? `${affordance.kind}: ${affordance.elementRef}`
+        : affordance.kind
+      return `<span class="qfd-affordance" data-owner-interaction="${escapeHtml(affordance.interactionRef)}" data-affordance-kind="${affordance.kind}">${escapeHtml(label)}</span>`
     })
     .join('')
-    .replace(/\n/g, '<br/>')
+  return `<section class="qfd-stimulus" data-sr-id="${escapeHtml(realization.id)}" data-mode="${realization.mode}" data-modality="${realization.realizedModality}">${body}${affordances ? `<div class="qfd-affordances">${affordances}</div>` : ''}</section>`
 }
 
-// ── Static content rendering ─────────────────────────────────────────────────
-
-function stimulusHtml(ctx: RenderContext, srRef: string): string {
-  const sr = ctx.stimulusRealizationById.get(srRef)
-  const stimulus = sr ? ctx.stimulusById.get(sr.stimulusRef) : undefined
-  if (!stimulus) return `<div class="qfd-missing">[missing stimulus]</div>`
-  const content = resolveRealizedStimulusContent(stimulus, sr)
-  switch (stimulus.type) {
-    case 'Text':
-      return `<div class="qfd-text">${escapeHtml(content ?? '').replace(/\n/g, '<br/>')}</div>`
-    case 'Image':
-      return content
-        ? `<img class="qfd-img" src="${escapeHtml(content)}" alt="${escapeHtml(stimulus.code)}"/>`
-        : `<div class="qfd-missing">[no image content]</div>`
-    case 'Audio':
-      return content
-        ? `<audio class="qfd-audio" controls src="${escapeHtml(content)}"></audio>`
-        : `<div class="qfd-missing">[no audio content]</div>`
-    case 'Video':
-      return content
-        ? `<video class="qfd-video" controls src="${escapeHtml(content)}"></video>`
-        : `<div class="qfd-missing">[no video content]</div>`
-  }
-}
-
-/** Filling variant of stimulusHtml used inside Canvas items, so the stimulus
- * occupies exactly the area the author assigned it (matching the editor). */
-function stimulusCanvasHtml(ctx: RenderContext, srRef: string): string {
-  const sr = ctx.stimulusRealizationById.get(srRef)
-  const stimulus = sr ? ctx.stimulusById.get(sr.stimulusRef) : undefined
-  if (!stimulus) return `<div class="qfd-missing">[missing stimulus]</div>`
-  const content = resolveRealizedStimulusContent(stimulus, sr)
-  switch (stimulus.type) {
-    case 'Text':
-      return `<div class="qfd-canvas-text">${escapeHtml(content ?? '').replace(/\n/g, '<br/>')}</div>`
-    case 'Image':
-      return content
-        ? `<img class="qfd-canvas-img" src="${escapeHtml(content)}" alt="${escapeHtml(stimulus.code)}"/>`
-        : `<div class="qfd-missing">[no image content]</div>`
-    case 'Audio':
-      return content
-        ? `<audio class="qfd-audio" controls src="${escapeHtml(content)}"></audio>`
-        : `<div class="qfd-missing">[no audio content]</div>`
-    case 'Video':
-      return content
-        ? `<video class="qfd-canvas-img" controls src="${escapeHtml(content)}"></video>`
-        : `<div class="qfd-missing">[no video content]</div>`
-  }
-}
-
-function staticGapInput(gap: { type: string }, fill = false): string {
-  switch (gap.type) {
-    case 'TextInputGap':
-      return `<span class="qfd-blank">&nbsp;</span>`
-    case 'NumberInputGap':
-      return `<span class="qfd-blank qfd-blank-sm">&nbsp;</span>`
-    case 'DateInputGap':
-      return `<span class="qfd-blank">&nbsp;</span>`
-    case 'DropTargetGap':
-      return `<span class="qfd-dropzone${fill ? ' qfd-dropzone-fill' : ''}">&nbsp;</span>`
-  }
-  return ''
-}
-
-/** Printed (non-interactive) option pool for paper completion items. */
-function completingBankHtml(
-  completingItems: {
-    id: string
-    type: string
-    text?: string
-    imageRef?: string
-  }[]
+function renderResponseSite(
+  ctx: RenderContext,
+  ownerInteractionRef: string,
+  id: string
 ): string {
-  if (completingItems.length === 0) return ''
-  return `<div class="qfd-bank"><span class="qfd-bank-label">Options:</span>${completingItems
-    .map((it) =>
-      it.type === 'ImageCompletingItem'
-        ? `<span class="qfd-chip"><img class="qfd-item-img" src="${escapeHtml(it.imageRef ?? '')}" alt=""/></span>`
-        : `<span class="qfd-chip">${escapeHtml(it.text ?? '')}</span>`
-    )
-    .join('')}</div>`
-}
-
-function interactionInstructionHtml(ctx: RenderContext, irRef: string): string {
-  const ir = ctx.interactionRealizationById.get(irRef)
-  const interaction = ir
-    ? ctx.interactionById.get(ir.interactionRef)
-    : undefined
-  if (!ir || !interaction) return ''
-  const instruction = ir.realizedInstruction?.trim() || interaction.instruction
-  return instruction
-    ? `<div class="qfd-instruction">${escapeHtml(instruction).replace(/\n/g, '<br/>')}</div>`
-    : ''
-}
-
-function interactionWidgetHtml(ctx: RenderContext, irRef: string): string {
-  const ir = ctx.interactionRealizationById.get(irRef)
-  const interaction = ir
-    ? ctx.interactionById.get(ir.interactionRef)
-    : undefined
-  if (!ir || !interaction) return ''
-
-  let widget = ''
-  switch (ir.mechanism) {
-    case 'ListSelection':
-      if (interaction.type === 'Selecting') {
-        const inputType = interaction.maxSelections === 1 ? 'radio' : 'checkbox'
-        widget = `<div class="qfd-list">${interaction.choices
-          .map(
-            (c) =>
-              `<label class="qfd-option"><input type="${inputType}" disabled/> <span class="qfd-code">${escapeHtml(c.code)}</span>${escapeHtml(c.name)}</label>`
-          )
-          .join('')}</div>`
-      }
+  const interaction = ctx.interactions.get(ownerInteractionRef)
+  const realization = ctx.interactionRealizations.get(ownerInteractionRef)
+  if (!interaction || !realization) return ''
+  let content = 'Response'
+  switch (realization.type) {
+    case 'SelectingRealization':
+      content = 'Referenced selection response'
       break
-    case 'SpatialSelection':
-      widget = '' // choices rendered via placed ResponseElementBlocks
+    case 'OrderingRealization':
+      content =
+        realization.mode === 'OrderNotation'
+          ? 'Order notation response'
+          : 'Direct ordering response'
       break
-    case 'DirectOrdering':
-      if (interaction.type === 'Ordering') {
-        widget = `<ol class="qfd-order">${interaction.orderingItems
-          .map(
-            (i) =>
-              `<li><span class="qfd-code">${escapeHtml(i.code)}</span>${escapeHtml(i.name)}</li>`
-          )
-          .join('')}</ol>`
-      }
+    case 'RelatingRealization':
+      content =
+        realization.mode === 'RelationNotation'
+          ? 'Relation notation response'
+          : 'Direct relation response'
       break
-    case 'OrderNotation':
-      if (interaction.type === 'Ordering') {
-        widget = `<div class="qfd-list">${interaction.orderingItems
-          .map(
-            (i) =>
-              `<div class="qfd-option-row"><span class="qfd-code">${escapeHtml(i.code)}</span><span style="flex:1">${escapeHtml(i.name)}</span><span class="qfd-blank qfd-blank-sm">&nbsp;</span></div>`
-          )
-          .join('')}</div>`
-      }
+    case 'CompletingRealization':
+      content = 'Gap response'
       break
-    case 'DirectRelationConstruction':
-      if (interaction.type === 'Relating') {
-        widget = `<div class="qfd-relate"><ul>${interaction.sourceSet.relatingElements
-          .map(
-            (s) =>
-              `<li><span class="qfd-code">${escapeHtml(s.code)}</span>${escapeHtml(s.name)}</li>`
-          )
-          .join('')}</ul><ul>${interaction.targetSet.relatingElements
-          .map(
-            (t) =>
-              `<li><span class="qfd-code">${escapeHtml(t.code)}</span>${escapeHtml(t.name)}</li>`
-          )
-          .join('')}</ul></div>`
-      }
+    case 'ShortInputRealization':
+      content = `<input aria-label="Short response" type="text" />`
       break
-    case 'RelationNotation':
-      if (interaction.type === 'Relating') {
-        // Paper relation notation shows BOTH relating sets: source items with
-        // a blank field to write the matched target code, and the full target
-        // set (with codes) as the reference side.
-        const sources = `<div class="qfd-list">${interaction.sourceSet.relatingElements
-          .map(
-            (s) =>
-              `<div class="qfd-option-row"><span class="qfd-code">${escapeHtml(s.code)}</span><span style="flex:1">${escapeHtml(s.name)}</span><span class="qfd-blank qfd-blank-sm">&nbsp;</span></div>`
-          )
-          .join('')}</div>`
-        const targets = `<div class="qfd-list">${interaction.targetSet.relatingElements
-          .map(
-            (t) =>
-              `<div class="qfd-option-row"><span class="qfd-code">${escapeHtml(t.code)}</span>${escapeHtml(t.name)}</div>`
-          )
-          .join('')}</div>`
-        widget = `<div class="qfd-relate">${sources}${targets}</div>`
-      }
+    case 'EssayRealization':
+      content = '<textarea aria-label="Essay response"></textarea>'
       break
-    case 'Completion':
-      if (interaction.type === 'Completing') {
-        const localGaps = interaction.completingGaps.filter(
-          (g) => !g.stimulusRef
-        )
-        const content = interaction.localContent
-        if (content) {
-          const markerGaps = localGaps.filter(
-            (g) => g.anchor?.kind === 'TextAnchor' && g.anchor.marker
-          )
-          if (markerGaps.length > 0) {
-            widget = `<div class="qfd-text">${substituteMarkers(
-              content,
-              markerGaps.map((g) => ({
-                marker: g.anchor?.kind === 'TextAnchor' ? g.anchor.marker : '',
-                html: staticGapInput(g),
-              }))
-            )}</div>`
-          } else {
-            widget = `<div class="qfd-text">${escapeHtml(content).replace(/\n/g, '<br/>')}</div><div class="qfd-list">${localGaps
-              .map((g) => staticGapInput(g))
-              .join('')}</div>`
-          }
-          widget += completingBankHtml(interaction.completingItems)
-        } else {
-          widget = `<div class="qfd-list">${localGaps
-            .map((g) => staticGapInput(g))
-            .join('')}</div>`
-        }
-      }
+    case 'ArtifactSubmissionRealization':
+      content =
+        realization.submissionMode === 'DigitalSubmission'
+          ? '<input aria-label="Artifact submission" type="file" />'
+          : 'Physical submission required'
       break
-    case 'ShortEntry':
-      if (interaction.type === 'ShortInput') {
-        widget = `<span class="qfd-blank">&nbsp;</span>`
-      }
-      break
-    case 'ExtendedTextEntry':
-      widget = `<div class="qfd-essay"></div>`
-      break
-    case 'DigitalArtifactSubmission':
-      widget = `<div class="qfd-artifact">Attach digital artifacts</div>`
-      break
-    case 'PhysicalArtifactSubmission':
-      // A physical submission is a requirement, not an on-paper container.
-      // Render a clear instruction instead of an empty drop-zone area.
-      widget = `<div class="qfd-artifact-note"><strong>Physical submission required</strong><br/>Please attach/submit the required material as instructed.</div>`
-      break
-    case 'DirectMarking':
-      if (interaction.type === 'Marking') {
-        const assoc = ctx.associationsByInteractionId
-          .get(interaction.id)
-          ?.find((a) => a.role === 'Workspace')
-        const stimulus = assoc
-          ? ctx.stimulusById.get(assoc.stimulusRef)
-          : undefined
-        if (stimulus) {
-          const content = resolveRealizedStimulusContent(
-            stimulus,
-            ctx.qfd.stimulusRealizations.find(
-              (sr) => sr.stimulusRef === stimulus.id
-            )
-          )
-          if (stimulus.type === 'Text') {
-            // The workspace text is rendered by its own StimulusBlock; the QD
-            // instruction (rendered by interactionHtml) tells the respondent
-            // to mark the relevant part physically. No interactive control.
-            widget = ''
-          } else if (content) {
-            widget = `<div class="qfd-mark"><img class="qfd-img" src="${escapeHtml(content)}" alt="${escapeHtml(stimulus.code)}"/><div class="qfd-mark-hint">Mark on the image</div></div>`
-          }
-        }
-      }
+    case 'MarkingRealization':
+      content = 'Marking workspace response'
       break
   }
-
-  return widget
+  return `<div class="qfd-response-site" data-response-site-id="${escapeHtml(id)}" data-interaction-ref="${escapeHtml(ownerInteractionRef)}">${content}</div>`
 }
 
-function interactionHtml(ctx: RenderContext, irRef: string): string {
-  const ir = ctx.interactionRealizationById.get(irRef)
-  const interaction = ir
-    ? ctx.interactionById.get(ir.interactionRef)
-    : undefined
-  if (!ir || !interaction)
-    return `<div class="qfd-missing">[missing interaction]</div>`
-  return `<div>${interactionInstructionHtml(ctx, irRef)}${interactionWidgetHtml(ctx, irRef)}</div>`
-}
-
-function responseElementHtml(ctx: RenderContext, el: ContentElement): string {
-  if (el.kind !== 'ResponseElementBlock') return ''
-  const ownerId = findOwningInteractionId(ctx.qd, el.elementKind, el.elementRef)
-  const owner = ownerId ? ctx.interactionById.get(ownerId) : undefined
-
-  if (el.elementKind === 'Choice') {
-    const choice =
-      owner?.type === 'Selecting'
-        ? owner.choices.find((c) => c.id === el.elementRef)
-        : undefined
-    return `<span class="qfd-chip"><span class="qfd-code">${escapeHtml(choice?.code ?? '?')}</span>${escapeHtml(choice?.name ?? '')}</span>`
+type LocalCompositeEntry = Extract<
+  IndexedLayoutable,
+  {
+    kind:
+      | 'SelectionPresentation'
+      | 'OrderingPresentation'
+      | 'RelatingSetPresentation'
+      | 'CompletingItemSourceRealization'
   }
-  if (el.elementKind === 'CompletingGap') {
-    const gap = ctx.gapById.get(el.elementRef)
-    return gap ? staticGapInput(gap) : ''
+>
+
+function renderLayout(
+  ctx: RenderContext,
+  layout: LayoutElement,
+  localScope?: LocalCompositeEntry
+): string {
+  if (layout.kind === 'LayoutGroup') {
+    return `<div class="qfd-layout qfd-layout-${layout.orientation.toLowerCase()}" data-orientation="${layout.orientation}">${layout.children.map((child) => renderLayout(ctx, child, localScope)).join('')}</div>`
   }
-  if (el.elementKind === 'OrderingItem') {
-    const item =
-      owner?.type === 'Ordering'
-        ? owner.orderingItems.find((i) => i.id === el.elementRef)
-        : undefined
-    return `<span class="qfd-chip"><span class="qfd-code">${escapeHtml(item?.code ?? '?')}</span>${escapeHtml(item?.name ?? '')}</span>`
-  }
-  const element =
-    owner?.type === 'Relating'
-      ? [
-          ...owner.sourceSet.relatingElements,
-          ...owner.targetSet.relatingElements,
-        ].find((e) => e.id === el.elementRef)
-      : undefined
-  return `<span class="qfd-chip"><span class="qfd-code">${escapeHtml(element?.code ?? '?')}</span>${escapeHtml(element?.name ?? '')}</span>`
-}
-
-function contentHtml(ctx: RenderContext, el: ContentElement): string {
-  if (el.kind === 'StimulusBlock')
-    return stimulusHtml(ctx, el.stimulusRealizationRef)
-  if (el.kind === 'InteractionBlock')
-    return interactionHtml(ctx, el.interactionRealizationRef)
-  return responseElementHtml(ctx, el)
-}
-
-// ── Static container rendering ───────────────────────────────────────────────
-
-function stackHtml(ctx: RenderContext, container: Stack): string {
-  return `<div class="qfd-stack" style="flex-direction:${container.direction === 'Horizontal' ? 'row' : 'column'}">${container.children
-    .map((c) => nodeHtml(ctx, c))
-    .join('')}</div>`
-}
-
-function gridHtml(ctx: RenderContext, container: Grid): string {
-  return `<div class="qfd-grid" style="display:grid;grid-template-columns:repeat(${container.columns},minmax(0,1fr));gap:12px">${container.items
-    .map(
-      (item) =>
-        `<div style="grid-column:${item.column + 1} / span ${item.columnSpan};grid-row:${item.row + 1} / span ${item.rowSpan}">${nodeHtml(
-          ctx,
-          item.child
-        )}</div>`
-    )
-    .join('')}</div>`
-}
-
-function spatialNodeHtml(ctx: RenderContext, el: LayoutElement): string {
-  if (el.kind === 'InteractionBlock') {
-    return interactionWidgetHtml(ctx, el.interactionRealizationRef)
-  }
-  if (el.kind === 'StimulusBlock') {
-    return stimulusCanvasHtml(ctx, el.stimulusRealizationRef)
-  }
-  if (
-    el.kind === 'ResponseElementBlock' &&
-    el.elementKind === 'CompletingGap'
-  ) {
-    const gap = ctx.gapById.get(el.elementRef)
-    return gap ? staticGapInput(gap, true) : ''
-  }
-  return nodeHtml(ctx, el)
-}
-
-function canvasHtml(ctx: RenderContext, container: Canvas): string {
-  // The instruction of an InteractionBlock is hoisted above the surface; its
-  // widget (when it renders visible content) is placed spatially. Every item is
-  // positioned with the same normalized coordinates used by the editor, so the
-  // preview reproduces the author's Canvas arrangement exactly.
-  const headers: string[] = []
-  const spatialItems: CanvasItem[] = []
-  for (const item of container.items) {
-    if (item.child.kind === 'InteractionBlock') {
-      const ref = item.child.interactionRealizationRef
-      headers.push(interactionInstructionHtml(ctx, ref))
-      if (interactionBlockRendersWidget(ctx, ref)) {
-        spatialItems.push(item)
-      }
-      continue
+  const entry = indexedLayoutable(
+    ctx,
+    layout.realizationRef,
+    localScope ? { kind: localScope.kind, id: localScope.value.id } : undefined
+  )
+  if (!entry)
+    return `<div class="qfd-missing-realization">Missing ${escapeHtml(layout.realizationRef.kind)} ${escapeHtml(layout.realizationRef.id)}</div>`
+  switch (entry.kind) {
+    case 'StimulusRealization':
+      return renderStimulus(ctx, entry.value)
+    case 'InstructionRealization': {
+      const interaction = ctx.interactions.get(entry.ownerInteractionRef)
+      const text =
+        entry.value.realizedText ??
+        (entry.value.role === 'TaskInstruction'
+          ? interaction?.instruction
+          : undefined)
+      if (text === undefined) return ''
+      const className =
+        entry.value.role === 'TaskInstruction'
+          ? 'qfd-instruction'
+          : 'qfd-operational-guidance'
+      return `<div class="${className}" data-instruction-role="${entry.value.role}">${escapeHtml(text)}</div>`
     }
-    if (
-      item.child.kind === 'ResponseElementBlock' &&
-      item.child.elementKind === 'CompletingGap' &&
-      isQdAnchoredGap(ctx, item.child.elementRef)
-    ) {
-      // QD-anchored gaps are positioned relative to the stimulus below,
-      // never by a (stale) QFD placement.
-      continue
+    case 'ElementPresentation':
+      return renderElement(ctx, entry.value)
+    case 'SelectionPresentation':
+      return `<div class="qfd-options" data-selection-mode="${entry.value.mode}">${renderLayout(ctx, entry.value.localLayout, entry)}</div>`
+    case 'OrderingPresentation': {
+      const realization = ctx.interactionRealizations.get(
+        entry.ownerInteractionRef
+      )
+      const mode =
+        realization?.type === 'OrderingRealization'
+          ? realization.mode
+          : 'DirectOrdering'
+      return `<div class="qfd-ordering" data-ordering-mode="${mode}">${renderLayout(ctx, entry.value.localLayout, entry)}</div>`
     }
-    spatialItems.push(item)
-  }
-  for (const placement of anchoredCanvasGapPlacements(ctx, container)) {
-    spatialItems.push({
-      child: {
-        kind: 'ResponseElementBlock',
-        elementKind: 'CompletingGap',
-        elementRef: placement.elementRef,
-      },
-      area: placement.area,
-      layer: placement.layer,
-    })
-  }
-
-  const itemsHtml =
-    spatialItems.length === 0
-      ? '[empty canvas]'
-      : spatialItems
-          .map(
-            (item) =>
-              `<div class="qfd-canvas-item" style="left:${item.area.x * 100}%;top:${item.area.y * 100}%;width:${item.area.width * 100}%;height:${item.area.height * 100}%;z-index:${item.layer}">${spatialNodeHtml(
-                ctx,
-                item.child
-              )}</div>`
-          )
-          .join('')
-  return `${headers.join('')}<div class="qfd-canvas" style="height:${CANVAS_BASE_HEIGHT_PX}px">${itemsHtml}</div>`
-}
-
-function inlineHtml(ctx: RenderContext, container: Inline): string {
-  const consumed = new Set<number>()
-  const parts: string[] = []
-  const anchored = container.items
-    .map((item, i) => ({ item, i }))
-    .filter(
-      ({ item }) => item.anchor?.kind === 'TextAnchor' && item.anchor.marker
-    )
-
-  container.items.forEach((item, idx) => {
-    if (consumed.has(idx)) return
-    const child = item.child
-    if (child.kind === 'StimulusBlock') {
-      const sr = ctx.stimulusRealizationById.get(child.stimulusRealizationRef)
-      const stimulus = sr ? ctx.stimulusById.get(sr.stimulusRef) : undefined
-      const content = stimulus
-        ? resolveRealizedStimulusContent(stimulus, sr)
-        : undefined
-      if (stimulus?.type === 'Text' && content) {
-        const reps = anchored.filter(({ i }) => !consumed.has(i))
-        if (reps.length > 0) {
-          reps.forEach((r) => consumed.add(r.i))
-          parts.push(
-            substituteMarkers(
-              content,
-              reps.map((r) => ({
-                marker:
-                  r.item.anchor?.kind === 'TextAnchor'
-                    ? r.item.anchor.marker
-                    : '',
-                html: nodeHtml(ctx, r.item.child),
-              }))
-            )
-          )
-          return
-        }
-      }
-    }
-    parts.push(nodeHtml(ctx, child))
-  })
-
-  return `<div class="qfd-inline">${parts.join('')}</div>`
-}
-
-function nodeHtml(ctx: RenderContext, el: LayoutElement): string {
-  switch (el.kind) {
-    case 'Stack':
-      return stackHtml(ctx, el)
-    case 'Grid':
-      return gridHtml(ctx, el)
-    case 'Canvas':
-      return canvasHtml(ctx, el)
-    case 'Inline':
-      return inlineHtml(ctx, el)
-    default:
-      return contentHtml(ctx, el)
+    case 'RelatingSetPresentation':
+      return `<section class="qfd-relating-set">${entry.value.realizedLabel ? `<h4>${escapeHtml(entry.value.realizedLabel)}</h4>` : ''}${renderLayout(ctx, entry.value.localLayout, entry)}</section>`
+    case 'CompletingItemSourceRealization':
+      return `<section class="qfd-item-source"><strong>Options:</strong>${renderLayout(ctx, entry.value.localLayout, entry)}</section>`
+    case 'ResponseSiteRealization':
+      return renderResponseSite(ctx, entry.ownerInteractionRef, entry.value.id)
   }
 }
 
-/** Builds a self-contained HTML fragment (inline `<style>` + markup) presenting
- * the realized form. Used for the web HTML export and as the paper/PDF body. */
+/** Static export deliberately rejects conditional runtime behavior it cannot execute. */
 export function buildHtmlFragment(
   qd: QuestionDefinition,
   qfd: QuestionFormDefinition
 ): string {
+  if (qfd.dependencyRealizations.length > 0)
+    throw new StaticDependencyUnsupportedError()
   const ctx = buildRenderContext(qd, qfd)
-  return `<style>${FRAGMENT_STYLE}</style><div class="qfd-root">${nodeHtml(ctx, qfd.rootLayout)}</div>`
+  return `<style>${FRAGMENT_STYLE}</style>${renderLayout(ctx, qfd.rootLayout)}`
 }

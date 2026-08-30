@@ -28,7 +28,7 @@ export function openPaperPdf(
   qd: QuestionDefinition,
   qfd: QuestionFormDefinition
 ): void {
-  const title = `${qd.shortDescription ?? 'Question form'} — ${qfd.targetProfileRef}`
+  const title = `${qd.id} — ${qfd.targetProfileRef}`
   const body = buildHtmlFragment(qd, qfd)
 
   const doc = `<!doctype html>
