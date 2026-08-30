@@ -1,0 +1,1 @@
+import './rendererFidelity.test.tsx'

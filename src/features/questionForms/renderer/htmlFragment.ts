@@ -110,11 +110,25 @@ function renderStimulus(
   const stimulus = ctx.stimuli.get(realization.stimulusRef)
   if (!stimulus) return ''
   const content = resolveRealizedStimulusContent(stimulus, realization)
-  const body = content
-    ? realization.realizedModality === 'Image'
-      ? `<img src="${escapeHtml(content)}" alt="" />`
-      : `<div class="qfd-stimulus-content">${escapeHtml(content)}</div>`
-    : '<div class="qfd-stimulus-content-unavailable">Content unavailable</div>'
+  let body =
+    '<div class="qfd-stimulus-content-unavailable">Content unavailable</div>'
+  if (content) {
+    const escaped = escapeHtml(content)
+    switch (realization.realizedModality) {
+      case 'Text':
+        body = `<div class="qfd-stimulus-content">${escaped}</div>`
+        break
+      case 'Image':
+        body = `<img src="${escaped}" alt="" />`
+        break
+      case 'Audio':
+        body = `<audio controls src="${escaped}"></audio>`
+        break
+      case 'Video':
+        body = `<video controls src="${escaped}"></video>`
+        break
+    }
+  }
   const affordances = anchoredAffordances(ctx, realization.id)
     .map((affordance) => {
       const label = affordance.elementRef

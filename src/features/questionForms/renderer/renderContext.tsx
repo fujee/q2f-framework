@@ -37,6 +37,9 @@ export type IndexedLayoutable =
       kind: 'SelectionPresentation'
       value: SelectionPresentation
       ownerInteractionRef: string
+      purpose:
+        | { kind: 'StandaloneSelecting' }
+        | { kind: 'CompletingItemSelection'; gapRef: string }
     }
   | {
       kind: 'OrderingPresentation'
@@ -47,6 +50,7 @@ export type IndexedLayoutable =
       kind: 'RelatingSetPresentation'
       value: RelatingSetPresentation
       ownerInteractionRef: string
+      set: 'Source' | 'Target'
     }
   | {
       kind: 'CompletingItemSourceRealization'
@@ -57,6 +61,14 @@ export type IndexedLayoutable =
       kind: 'ResponseSiteRealization'
       value: ResponseSiteRealization
       ownerInteractionRef: string
+      purpose:
+        | { kind: 'SelectingReferenced'; stimulusRealizationRef: string }
+        | { kind: 'RelatingNotation' }
+        | { kind: 'CompletingInput'; gapRef: string }
+        | { kind: 'CompletingPlacement'; gapRef: string }
+        | { kind: 'ShortInput' }
+        | { kind: 'Essay' }
+        | { kind: 'ArtifactSubmission' }
     }
 
 export interface RenderContext {
@@ -115,6 +127,7 @@ function indexInteraction(
           kind: 'SelectionPresentation',
           value: realization.standaloneSelection,
           ownerInteractionRef,
+          purpose: { kind: 'StandaloneSelecting' },
         })
         indexElements(
           localMaps,
@@ -132,6 +145,10 @@ function indexInteraction(
             kind: 'ResponseSiteRealization',
             value: workspace.referencedResponseSite,
             ownerInteractionRef,
+            purpose: {
+              kind: 'SelectingReferenced',
+              stimulusRealizationRef: workspace.stimulusRealizationRef,
+            },
           })
       })
       break
@@ -149,14 +166,15 @@ function indexInteraction(
       )
       break
     case 'RelatingRealization':
-      for (const presentation of [
-        realization.sourceSetPresentation,
-        realization.targetSetPresentation,
-      ]) {
+      for (const [set, presentation] of [
+        ['Source', realization.sourceSetPresentation],
+        ['Target', realization.targetSetPresentation],
+      ] as const) {
         put(map, {
           kind: 'RelatingSetPresentation',
           value: presentation,
           ownerInteractionRef,
+          set,
         })
         indexElements(
           localMaps,
@@ -170,6 +188,7 @@ function indexInteraction(
           kind: 'ResponseSiteRealization',
           value: realization.notationResponseSite,
           ownerInteractionRef,
+          purpose: { kind: 'RelatingNotation' },
         })
       break
     case 'CompletingRealization':
@@ -179,12 +198,17 @@ function indexInteraction(
             kind: 'ResponseSiteRealization',
             value: gap.responseSite,
             ownerInteractionRef,
+            purpose: { kind: 'CompletingInput', gapRef: gap.gapRef },
           })
         if (gap.type === 'ItemGapRealization' && gap.selectionPresentation) {
           put(map, {
             kind: 'SelectionPresentation',
             value: gap.selectionPresentation,
             ownerInteractionRef,
+            purpose: {
+              kind: 'CompletingItemSelection',
+              gapRef: gap.gapRef,
+            },
           })
           indexElements(
             localMaps,
@@ -201,6 +225,7 @@ function indexInteraction(
             kind: 'ResponseSiteRealization',
             value: gap.referencedPlacementSite,
             ownerInteractionRef,
+            purpose: { kind: 'CompletingPlacement', gapRef: gap.gapRef },
           })
       })
       if (realization.itemSource) {
@@ -226,6 +251,10 @@ function indexInteraction(
         kind: 'ResponseSiteRealization',
         value: realization.responseSite,
         ownerInteractionRef,
+        purpose:
+          realization.type === 'ShortInputRealization'
+            ? { kind: 'ShortInput' }
+            : { kind: 'Essay' },
       })
       break
     case 'ArtifactSubmissionRealization':
@@ -233,6 +262,7 @@ function indexInteraction(
         kind: 'ResponseSiteRealization',
         value: realization.submissionSite,
         ownerInteractionRef,
+        purpose: { kind: 'ArtifactSubmission' },
       })
       break
     case 'MarkingRealization':
@@ -349,6 +379,101 @@ export function indexedLayoutable(
       .get(layoutableRefKey(localScope))
       ?.get(layoutableRefKey(ref))
   return ctx.layoutables.get(layoutableRefKey(ref))
+}
+
+export type LocalPresentationScope =
+  | { kind: 'SelectionPresentation'; value: SelectionPresentation }
+  | { kind: 'OrderingPresentation'; value: OrderingPresentation }
+  | { kind: 'RelatingSetPresentation'; value: RelatingSetPresentation }
+  | {
+      kind: 'CompletingItemSourceRealization'
+      value: CompletingItemSourceRealization
+    }
+
+export function localPresentationRef(
+  scope: LocalPresentationScope
+): LayoutableRealizationRef {
+  return { kind: scope.kind, id: scope.value.id }
+}
+
+export function orderedLocalElementPresentations(
+  ctx: RenderContext,
+  scope: LocalPresentationScope
+): readonly ElementPresentation[] {
+  const presentationRef = localPresentationRef(scope)
+  const result: ElementPresentation[] = []
+  const visit = (layout: import('@/domain/qfd/model').LayoutElement): void => {
+    if (layout.kind === 'LayoutGroup') {
+      layout.children.forEach(visit)
+      return
+    }
+    const entry = indexedLayoutable(ctx, layout.realizationRef, presentationRef)
+    if (entry?.kind === 'ElementPresentation') result.push(entry.value)
+  }
+  visit(scope.value.localLayout)
+  return result
+}
+
+export function elementPresentationSemanticRef(
+  presentation: ElementPresentation
+): string {
+  switch (presentation.elementRef.kind) {
+    case 'Choice':
+      return presentation.elementRef.choiceRef
+    case 'OrderingItem':
+      return presentation.elementRef.orderingItemRef
+    case 'RelatingElement':
+      return presentation.elementRef.relatingElementRef
+    case 'CompletingItem':
+      return presentation.elementRef.completingItemRef
+  }
+}
+
+export function elementPresentationText(
+  ctx: RenderContext,
+  presentation: ElementPresentation
+): string {
+  if (presentation.realizedText !== undefined) return presentation.realizedText
+  const interaction = ctx.interactions.get(
+    presentation.elementRef.interactionRef
+  )
+  if (!interaction) return elementPresentationSemanticRef(presentation)
+  switch (presentation.elementRef.kind) {
+    case 'Choice': {
+      const choiceRef = presentation.elementRef.choiceRef
+      return interaction.type === 'Selecting'
+        ? (interaction.choices.find(({ id }) => id === choiceRef)
+            ?.semanticContent ?? choiceRef)
+        : choiceRef
+    }
+    case 'OrderingItem': {
+      const orderingItemRef = presentation.elementRef.orderingItemRef
+      return interaction.type === 'Ordering'
+        ? (interaction.orderingItems.find(({ id }) => id === orderingItemRef)
+            ?.semanticContent ?? orderingItemRef)
+        : orderingItemRef
+    }
+    case 'RelatingElement': {
+      const relatingElementRef = presentation.elementRef.relatingElementRef
+      if (interaction.type !== 'Relating') return relatingElementRef
+      const set =
+        presentation.elementRef.set === 'Source'
+          ? interaction.sourceSet
+          : interaction.targetSet
+      return (
+        set.relatingElements.find(({ id }) => id === relatingElementRef)
+          ?.semanticContent ?? relatingElementRef
+      )
+    }
+    case 'CompletingItem': {
+      const completingItemRef = presentation.elementRef.completingItemRef
+      return interaction.type === 'Completing'
+        ? (interaction.completingItems.find(
+            ({ id }) => id === completingItemRef
+          )?.semanticContent ?? completingItemRef)
+        : completingItemRef
+    }
+  }
 }
 
 export function layoutableOwnerInteractionRef(
